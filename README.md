@@ -1,5 +1,74 @@
 ![image](https://user-images.githubusercontent.com/106916061/179006347-497d24c0-9bd6-45b7-8c49-d5cc8ecfe5d7.png)
-# BambuStudio
+# BambuStudio (Patched Fork)
+
+This is a patched fork of [Bambu Lab's BambuStudio](https://github.com/bambulab/BambuStudio) with additional features and fixes.
+
+## Added Features
+
+### Reload Presets (Cmd+R)
+
+Reload user presets from disk without restarting the app.
+
+- **Menu:** File → Reload Presets (Cmd+R)
+- **Button:** Refresh icon next to the preset dropdown on all tabs (process, filament, printer)
+- **Auto-select:** When new presets are detected after reload, the most recent one is automatically selected
+
+This enables external tools (scripts, AI assistants, CLI workflows) to generate Bambu Studio preset JSON files that appear in the slicer immediately — no restart required.
+
+#### Preset Directory
+
+User presets are stored at:
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/BambuStudio/user/<user_id>/process/` |
+| Windows | `%APPDATA%\BambuStudio\user\<user_id>\process\` |
+| Linux | `~/.config/BambuStudio/user/<user_id>/process/` |
+
+Replace `<user_id>` with your Bambu account ID (visible in the directory), or `default` if not logged in. Filament presets go in `filament/` instead of `process/`.
+
+Each preset needs two files: a `.json` and a `.info`.
+
+#### Process Preset Example
+
+**Structural PETG-CF 0.6mm @BBL H2C.json** — a structural profile with 4 walls and 40% infill:
+```json
+{
+    "from": "User",
+    "inherits": "0.24mm Balanced Strength @BBL H2C 0.6 nozzle",
+    "name": "Structural PETG-CF 0.6mm @BBL H2C",
+    "print_extruder_id": ["1", "1", "2", "2"],
+    "print_extruder_variant": ["Direct Drive Standard", "Direct Drive High Flow", "Direct Drive Standard", "Direct Drive High Flow"],
+    "print_settings_id": "Structural PETG-CF 0.6mm @BBL H2C",
+    "version": "2.5.0.7",
+    "wall_loops": "4",
+    "sparse_infill_density": "40%"
+}
+```
+
+**Structural PETG-CF 0.6mm @BBL H2C.info**:
+```
+sync_info = create
+user_id = <your_user_id>
+setting_id = 
+base_id = <parent_profile_setting_id>
+updated_time = 0
+```
+
+The `base_id` is the `setting_id` from the parent system profile JSON (found in the `system/BBL/process/` directory). Only settings that differ from the inherited base need to be included.
+
+Drop both files into the preset directory and hit Cmd+R.
+
+### Feature Branches for Upstream PRs
+
+| Branch | Feature |
+|---|---|
+| [`preset-hot-reload`](../../tree/preset-hot-reload) | Reload Presets button + Cmd+R |
+
+---
+
+## Original README
+
 Bambu Studio is a cutting-edge, feature-rich slicing software.  
 It contains project-based workflows, systematically optimized slicing algorithms, and an easy-to-use graphic interface, bringing users an incredibly smooth printing experience.
 
