@@ -59,11 +59,18 @@ The `base_id` is the `setting_id` from the parent system profile JSON (found in 
 
 Drop both files into the preset directory and hit Cmd+R.
 
+### Post-Processing Script Preview
+
+After slicing with post-processing scripts configured, the G-code is automatically re-parsed so the preview shows the post-processed toolpath. No need to export and drag the file back in.
+
+Especially useful with [BrickLayers](https://github.com/GeekDetour/BrickLayers) for interlocking layer preview.
+
 ### Feature Branches for Upstream PRs
 
 | Branch | Feature |
 |---|---|
 | [`preset-hot-reload`](../../tree/preset-hot-reload) | Reload Presets button + Cmd+R |
+| [`post-process-preview`](../../tree/post-process-preview) | G-code re-parse after post-processing |
 
 ---
 
