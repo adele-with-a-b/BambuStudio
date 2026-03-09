@@ -3413,7 +3413,7 @@ void GUI_App::copy_network_if_available()
 
 bool GUI_App::on_init_network(bool try_backup)
 {
-    int  load_agent_dll       = Slic3r::NetworkAgent::initialize_network_module(false, !app_config->get_bool("ignore_module_cert"));
+    int  load_agent_dll       = Slic3r::NetworkAgent::initialize_network_module(false, false); // Patched: skip cert validation
     bool create_network_agent = false;
 __retry:
     if (!load_agent_dll) {
@@ -3434,7 +3434,7 @@ __retry:
             if (try_backup) {
                 int result = Slic3r::NetworkAgent::unload_network_module();
                 BOOST_LOG_TRIVIAL(info) << "on_init_network, version mismatch, unload_network_module, result = " << result;
-                load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(true, !app_config->get_bool("ignore_module_cert"));
+                load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(true, false); // Patched: skip cert validation
                 try_backup = false;
                 goto __retry;
             }
