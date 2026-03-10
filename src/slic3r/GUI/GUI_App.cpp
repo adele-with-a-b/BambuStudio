@@ -5707,25 +5707,32 @@ void GUI_App::reload_user_presets_from_disk()
     preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
     mainframe->update_side_preset_ui();
 
-    // Find new presets and select the last one found
-    std::string new_print, new_filament;
+    // Count new and modified presets for notification
+    int new_prints = 0, new_filaments = 0;
     for (const auto& p : preset_bundle->prints)
         if (p.is_user() && old_prints.find(p.name) == old_prints.end())
-            new_print = p.name;
+            new_prints++;
     for (const auto& p : preset_bundle->filaments)
         if (p.is_user() && old_filaments.find(p.name) == old_filaments.end())
-            new_filament = p.name;
+            new_filaments++;
 
-    if (!new_print.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "New process preset found, selecting: " << new_print;
-        auto tab = get_tab(Preset::TYPE_PRINT);
-        if (tab) tab->select_preset(new_print);
+    // Show toast notification with reload stats
+    std::string msg = "Presets reloaded";
+    if (new_prints > 0 || new_filaments > 0) {
+        msg += ": ";
+        std::vector<std::string> parts;
+        if (new_prints > 0)
+            parts.push_back(std::to_string(new_prints) + " new process");
+        if (new_filaments > 0)
+            parts.push_back(std::to_string(new_filaments) + " new filament");
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i > 0) msg += ", ";
+            msg += parts[i];
+        }
     }
-    if (!new_filament.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "New filament preset found, selecting: " << new_filament;
-        auto tab = get_tab(Preset::TYPE_FILAMENT);
-        if (tab) tab->select_preset(new_filament);
-    }
+    BOOST_LOG_TRIVIAL(info) << msg;
+    if (plater())
+        plater()->get_notification_manager()->push_notification(msg);
 }
 
 //BBS reload when logout
