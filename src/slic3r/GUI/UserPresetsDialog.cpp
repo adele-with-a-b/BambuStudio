@@ -2,6 +2,7 @@
 #include "UserPresetsDialog.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
+#include "libslic3r/Preset.hpp"
 
 #include <slic3r/GUI/Widgets/CheckBox.hpp>
 #include <slic3r/GUI/Widgets/TabCtrl.hpp>
@@ -100,6 +101,9 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     m_switch_button->Rescale();
 
     init_preset_list();
+    create_nozzle_filter_buttons(this);
+    sizer->Insert(3, m_nozzle_filter_sizer, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
+
     update_preset_counts();
     on_collection_changed(0);
 
@@ -124,8 +128,117 @@ void UserPresetsDialog::init_preset_list()
                 }
             }
             presets.push_back(preset.name);
+
+            // Capture inherits and nozzle info for process presets
+            if (collection->type() == Preset::TYPE_PRINT) {
+                std::string inherits = preset.inherits();
+                m_preset_inherits[preset.name] = inherits;
+                m_preset_nozzle[preset.name] = get_nozzle_for_preset(inherits);
+            }
         }
         m_presets.emplace_back(std::move(presets));
+    }
+}
+
+std::string UserPresetsDialog::get_nozzle_for_preset(const std::string &inherits_name) const
+{
+    // Parse nozzle size from inherits name: "... 0.6 nozzle" → "0.6", no suffix → "0.4"
+    auto pos = inherits_name.find(" nozzle");
+    if (pos != std::string::npos && pos >= 3) {
+        // Walk back to find the nozzle diameter number
+        auto space = inherits_name.rfind(' ', pos - 1);
+        if (space != std::string::npos)
+            return inherits_name.substr(space + 1, pos - space - 1);
+    }
+    return "0.4";
+}
+
+void UserPresetsDialog::create_nozzle_filter_buttons(wxWindow *parent)
+{
+    // Collect unique nozzle sizes from process presets
+    std::set<std::string> nozzles;
+    for (auto &kv : m_preset_nozzle)
+        nozzles.insert(kv.second);
+
+    m_nozzle_filter_sizer = new wxBoxSizer(wxHORIZONTAL);
+    auto label = new Label(parent, _L("Nozzle:"));
+    label->SetFont(Label::Body_13);
+    m_nozzle_filter_sizer->Add(label, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
+
+    // "All" button
+    auto btn_all = new Button(parent, _L("All"));
+    btn_all->SetFont(Label::Body_13);
+    btn_all->SetMinSize({FromDIP(48), FromDIP(24)});
+    btn_all->SetCornerRadius(FromDIP(12));
+    btn_all->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) { on_nozzle_filter_changed(""); });
+    m_nozzle_filter_sizer->Add(btn_all, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+    m_nozzle_buttons.push_back(btn_all);
+
+    // One button per nozzle size
+    for (auto &nozzle : nozzles) {
+        auto btn = new Button(parent, from_u8(nozzle + "mm"));
+        btn->SetFont(Label::Body_13);
+        btn->SetMinSize({FromDIP(56), FromDIP(24)});
+        btn->SetCornerRadius(FromDIP(12));
+        btn->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this, nozzle](auto &) { on_nozzle_filter_changed(nozzle); });
+        m_nozzle_filter_sizer->Add(btn, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        m_nozzle_buttons.push_back(btn);
+    }
+
+    // Set initial visual state (All selected)
+    on_nozzle_filter_changed("");
+}
+
+void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
+{
+    m_nozzle_filter = nozzle;
+
+    // Update button visuals — highlight the active one
+    for (size_t i = 0; i < m_nozzle_buttons.size(); i++) {
+        bool active;
+        if (i == 0)
+            active = nozzle.empty();  // "All" button
+        else {
+            // Match button label to nozzle
+            std::string btn_label = into_u8(m_nozzle_buttons[i]->GetLabel());
+            active = (btn_label == nozzle + "mm");
+        }
+        if (active) {
+            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#00AE42"));
+            m_nozzle_buttons[i]->SetTextColorNormal(*wxWHITE);
+        } else {
+            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#F0F0F0"));
+            m_nozzle_buttons[i]->SetTextColorNormal(wxColour("#262E30"));
+        }
+        m_nozzle_buttons[i]->Refresh();
+    }
+
+    // Apply filter: hide/show presets based on nozzle
+    if (m_collection == 2) {  // Process tab
+        m_scrolled->Freeze();
+        for (auto &preset : m_presets[2]) {
+            auto sizer_it = m_preset_sizers.find(preset);
+            if (sizer_it == m_preset_sizers.end()) continue;
+
+            bool show = nozzle.empty() || m_preset_nozzle[preset] == nozzle;
+            if (!show) {
+                if (m_hiden_sizers.find(sizer_it->second) == m_hiden_sizers.end()) {
+                    sizer_it->second->Show(false);
+                    m_hiden_sizers.insert(sizer_it->second);
+                }
+            } else {
+                auto it = m_hiden_sizers.find(sizer_it->second);
+                if (it != m_hiden_sizers.end()) {
+                    sizer_it->second->Show(true);
+                    m_hiden_sizers.erase(it);
+                }
+            }
+
+            // Also hide group headers if all their children are hidden
+            // (handled by layout_preset_list)
+        }
+        layout_preset_list();
+        m_scrolled->Thaw();
     }
 }
 
@@ -279,6 +392,8 @@ void UserPresetsDialog::on_collection_changed(int collection)
     m_tab_ctrl->SetItemBold(m_collection, true);
     m_search->GetTextCtrl()->ChangeValue("");
     GetSizer()->Show(m_switch_button, m_collection == 1);
+    if (m_nozzle_filter_sizer)
+        GetSizer()->Show(m_nozzle_filter_sizer, m_collection == 2);
     Freeze();
     create_preset_list(m_scrolled);
     layout_preset_list(true);
