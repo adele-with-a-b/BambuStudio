@@ -211,8 +211,18 @@ void UserPresetsDialog::create_nozzle_filter_buttons(wxWindow *parent)
         m_nozzle_buttons.push_back(btn);
     }
 
-    // Set initial visual state (All selected)
-    on_nozzle_filter_changed("");
+    // Set initial visual state (All selected) — don't apply filters yet, presets aren't created
+    m_nozzle_filter = "";
+    for (size_t i = 0; i < m_nozzle_buttons.size(); i++) {
+        if (i == 0) {
+            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#00AE42"));
+            m_nozzle_buttons[i]->SetTextColorNormal(*wxWHITE);
+        } else {
+            bool dark = wxGetApp().dark_mode();
+            m_nozzle_buttons[i]->SetBackgroundColor(dark ? wxColour(78, 78, 78) : wxColour("#F0F0F0"));
+            m_nozzle_buttons[i]->SetTextColorNormal(dark ? wxColour(250, 250, 250) : wxColour("#262E30"));
+        }
+    }
 }
 
 void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
