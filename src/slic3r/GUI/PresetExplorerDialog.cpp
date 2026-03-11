@@ -332,6 +332,11 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     expand_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     expand_btn->Bind(wxEVT_LEFT_UP, [this, name = data.name](auto &) { on_preset_expand(name); });
 
+    // Compatibility icon
+    auto compat_bmp = create_scaled_bitmap(data.is_compatible ? "flag_green" : "flag_red", card, 12);
+    auto *compat_icon = new wxStaticBitmap(card, wxID_ANY, compat_bmp);
+    compat_icon->SetToolTip(data.is_compatible ? _L("Compatible with current printer and nozzle") : _L("Incompatible with current printer or nozzle selection"));
+
     // Name
     auto *name_label = new Label(card, from_u8(data.name));
     name_label->SetFont(Label::Body_13);
@@ -366,6 +371,7 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     }
 
     hsizer->Add(check, 0, wxALIGN_CENTER | wxLEFT, FromDIP(10));
+    hsizer->Add(compat_icon, 0, wxALIGN_CENTER | wxLEFT, FromDIP(6));
     hsizer->Add(name_label, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(8));
     hsizer->Add(badge, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
     hsizer->Add(expand_btn, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
@@ -387,11 +393,6 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
 
     wxColour orange("#F1754E");
 
-    // 3-column grid: Setting | Base Value | Override Value
-    auto *grid = new wxFlexGridSizer(3, FromDIP(3), FromDIP(12));
-    grid->AddGrowableCol(1, 1);
-    grid->AddGrowableCol(2, 1);
-
     auto bundle = wxGetApp().preset_bundle;
     PresetCollection *collection = nullptr;
     if (m_collection == 0) collection = &bundle->printers;
@@ -406,18 +407,6 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
 
     const Preset *parent_preset = collection->get_preset_base(*preset);
 
-    auto add_header = [&]() {
-        auto make_hdr = [&](const wxString &text) {
-            auto *lbl = new wxStaticText(panel, wxID_ANY, text);
-            lbl->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-            lbl->SetForegroundColour(text_secondary(dark));
-            return lbl;
-        };
-        grid->Add(make_hdr(_L("Setting")), 0);
-        grid->Add(make_hdr(_L("Base Value")), 0);
-        grid->Add(make_hdr(_L("Override")), 0);
-    };
-
     static const std::set<std::string> skip_keys = {
         "inherits", "from", "name", "print_settings_id", "filament_settings_id",
         "printer_settings_id", "version", "print_extruder_id", "print_extruder_variant",
@@ -425,97 +414,117 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
         "compatible_prints", "compatible_prints_condition"
     };
 
+    static const std::map<std::string, std::string> category_icons = {
+        {"Quality", "param_layer_height"}, {"Strength", "param_wall"}, {"Speed", "param_speed"},
+        {"Support", "param_support"}, {"Advanced", "param_advanced"}, {"Others", "param_advanced"},
+        {"Other", "param_advanced"}, {"Flush options", "param_flush"},
+    };
+
+    auto simplify = [](const std::string &val) -> std::pair<std::string, std::string> {
+        auto comma = val.find(',');
+        if (comma == std::string::npos) {
+            std::string v = val.length() > 60 ? val.substr(0, 57) + "..." : val;
+            return {v, ""};
+        }
+        std::string first = val.substr(0, comma);
+        bool all_same = true;
+        size_t pos = 0;
+        while (pos < val.size()) {
+            auto next = val.find(',', pos);
+            std::string part = val.substr(pos, next == std::string::npos ? next : next - pos);
+            if (part != first) { all_same = false; break; }
+            pos = next == std::string::npos ? val.size() : next + 1;
+        }
+        if (all_same) return {first, ""};
+        const char* vnames[] = {"Standard L", "High Flow L", "Standard R", "High Flow R"};
+        std::string tip = "Per-variant values:\n";
+        pos = 0; int i = 0;
+        while (pos < val.size()) {
+            auto next = val.find(',', pos);
+            std::string part = val.substr(pos, next == std::string::npos ? next : next - pos);
+            tip += (i < 4 ? std::string(vnames[i]) : "Slot " + std::to_string(i+1)) + ": " + part + "\n";
+            pos = next == std::string::npos ? val.size() : next + 1;
+            i++;
+        }
+        return {first + " \xe2\x93\x98", tip};
+    };
+
+    auto *main_sizer = new wxBoxSizer(wxVERTICAL);
+
     if (parent_preset && parent_preset != preset) {
         auto diff_keys = preset->config.diff(parent_preset->config);
 
-        int shown = 0;
+        // Group overrides by category
+        std::map<std::string, std::vector<std::string>> grouped;
         for (auto &key : diff_keys) {
             if (skip_keys.count(key)) continue;
-
-            if (shown == 0) add_header();
-
-            // Get human-readable label with category for disambiguation
-            std::string label = key;
-            if (print_config_def.options.count(key)) {
-                auto &def = print_config_def.options.at(key);
-                label = def.label.empty() ? key : def.label;
-                if (!def.category.empty())
-                    label = def.category + " > " + label;
-            }
-
-            // Simplify array values: "40,40,40,40" → "40"
-            auto simplify = [](const std::string &val) -> std::pair<std::string, std::string> {
-                // Returns {display, tooltip}. Tooltip empty if uniform.
-                auto comma = val.find(',');
-                if (comma == std::string::npos) {
-                    std::string v = val.length() > 60 ? val.substr(0, 57) + "..." : val;
-                    return {v, ""};
-                }
-                std::string first = val.substr(0, comma);
-                bool all_same = true;
-                std::string check = val;
-                size_t pos = 0;
-                while (pos < check.size()) {
-                    auto next = check.find(',', pos);
-                    std::string part = check.substr(pos, next == std::string::npos ? next : next - pos);
-                    if (part != first) { all_same = false; break; }
-                    pos = next == std::string::npos ? check.size() : next + 1;
-                }
-                if (all_same) return {first, ""};
-                const char* vnames[] = {"Standard L", "High Flow L", "Standard R", "High Flow R"};
-                std::string tip = "Per-variant values:\n";
-                pos = 0; int i = 0;
-                while (pos < val.size()) {
-                    auto next = val.find(',', pos);
-                    std::string part = val.substr(pos, next == std::string::npos ? next : next - pos);
-                    tip += (i < 4 ? std::string(vnames[i]) : "Slot " + std::to_string(i+1)) + ": " + part + "\n";
-                    pos = next == std::string::npos ? val.size() : next + 1;
-                    i++;
-                }
-                return {first + " \xe2\x93\x98", tip};
-            };
-
-            auto [base_val, base_tip] = simplify(parent_preset->config.opt_serialize(key));
-            auto [override_val, override_tip] = simplify(preset->config.opt_serialize(key));
-
-            auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(label));
-            lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-            lbl->SetForegroundColour(text_primary(dark));
-
-            auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_val));
-            base->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-            base->SetForegroundColour(text_secondary(dark));
-            if (!base_tip.empty()) base->SetToolTip(from_u8(base_tip));
-
-            auto *over = new wxStaticText(panel, wxID_ANY, from_u8(override_val));
-            over->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-            over->SetForegroundColour(orange);
-            if (!override_tip.empty()) over->SetToolTip(from_u8(override_tip));
-
-            grid->Add(lbl, 0);
-            grid->Add(base, 1, wxEXPAND);
-            grid->Add(over, 1, wxEXPAND);
-            shown++;
+            std::string cat = "Other";
+            if (print_config_def.options.count(key))
+                cat = print_config_def.options.at(key).category.empty() ? "Other" : print_config_def.options.at(key).category;
+            grouped[cat].push_back(key);
         }
 
-        if (shown == 0) {
-            auto *lbl = new wxStaticText(panel, wxID_ANY, _L("No overrides — identical to base profile"));
+        if (grouped.empty()) {
+            auto *lbl = new wxStaticText(panel, wxID_ANY, _L("No overrides \u2014 identical to base profile"));
             lbl->SetForegroundColour(text_secondary(dark));
-            grid->Add(lbl, 0);
-            grid->AddSpacer(0);
-            grid->AddSpacer(0);
+            main_sizer->Add(lbl, 0, wxALL, FromDIP(12));
+        } else {
+            for (auto &[cat, keys] : grouped) {
+                auto *cat_sizer = new wxBoxSizer(wxHORIZONTAL);
+                auto icon_it = category_icons.find(cat);
+                if (icon_it != category_icons.end()) {
+                    auto bmp = create_scaled_bitmap(icon_it->second, panel, 16);
+                    auto *icon = new wxStaticBitmap(panel, wxID_ANY, bmp);
+                    cat_sizer->Add(icon, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(5));
+                }
+                auto *cat_label = new wxStaticText(panel, wxID_ANY, from_u8(cat));
+                cat_label->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+                cat_label->SetForegroundColour(text_primary(dark));
+                cat_sizer->Add(cat_label, 0, wxALIGN_CENTER);
+                main_sizer->Add(cat_sizer, 0, wxLEFT | wxTOP, FromDIP(12));
+
+                auto *grid = new wxFlexGridSizer(3, FromDIP(2), FromDIP(16));
+                grid->AddGrowableCol(1, 1);
+                grid->AddGrowableCol(2, 1);
+
+                for (auto &key : keys) {
+                    std::string label = key;
+                    if (print_config_def.options.count(key)) {
+                        auto &def = print_config_def.options.at(key);
+                        label = def.label.empty() ? key : def.label;
+                    }
+
+                    auto [base_val, base_tip] = simplify(parent_preset->config.opt_serialize(key));
+                    auto [override_val, override_tip] = simplify(preset->config.opt_serialize(key));
+
+                    auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(label));
+                    lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+                    lbl->SetForegroundColour(text_primary(dark));
+
+                    auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_val));
+                    base->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+                    base->SetForegroundColour(text_secondary(dark));
+                    if (!base_tip.empty()) base->SetToolTip(from_u8(base_tip));
+
+                    auto *over = new wxStaticText(panel, wxID_ANY, from_u8(override_val));
+                    over->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+                    over->SetForegroundColour(orange);
+                    if (!override_tip.empty()) over->SetToolTip(from_u8(override_tip));
+
+                    grid->Add(lbl, 0, wxLEFT, FromDIP(24));
+                    grid->Add(base, 1, wxEXPAND);
+                    grid->Add(over, 1, wxEXPAND);
+                }
+                main_sizer->Add(grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
+            }
         }
     } else {
         auto *lbl = new wxStaticText(panel, wxID_ANY, _L("Root preset (no parent)"));
         lbl->SetForegroundColour(text_secondary(dark));
-        grid->Add(lbl, 0);
-        grid->AddSpacer(0);
-        grid->AddSpacer(0);
+        main_sizer->Add(lbl, 0, wxALL, FromDIP(12));
     }
 
-    auto *sizer = new wxBoxSizer(wxVERTICAL);
-    sizer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(12));
-    panel->SetSizer(sizer);
+    panel->SetSizer(main_sizer);
     return panel;
 }
 
@@ -539,8 +548,15 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
     auto *compat_cb = new wxCheckBox(parent, wxID_ANY, _L("Compatible only"));
     compat_cb->SetValue(m_filter_compatible_only);
     compat_cb->SetForegroundColour(text_primary(dark));
+    compat_cb->SetToolTip(_L("Show only presets compatible with the currently selected printer and nozzle size. Incompatible presets are designed for a different nozzle or printer model."));
     compat_cb->Bind(wxEVT_CHECKBOX, [this](auto &evt) {
         m_filter_compatible_only = evt.IsChecked();
+        if (m_filter_compatible_only) {
+            // Clear nozzle/base filters — compatible-only overrides them
+            m_filter_nozzles.clear();
+            m_filter_bases.clear();
+            m_filter_materials.clear();
+        }
         on_filter_changed();
     });
     sizer->Add(compat_cb, 0, wxALL, FromDIP(8));
@@ -561,7 +577,12 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
             // Disable if this is the only one selected — grayed out, can't uncheck
             if (is_active && m_filter_nozzles.size() == 1) {
                 cb->Enable(false);
-                cb->SetForegroundColour(text_primary(dark));  // keep text readable
+                cb->SetForegroundColour(text_primary(dark));
+            }
+            // Disable all nozzle filters when compatible-only is active
+            if (m_filter_compatible_only) {
+                cb->Enable(false);
+                cb->SetForegroundColour(text_primary(dark));
             }
             cb->Bind(wxEVT_CHECKBOX, [this, nozzle = kv.first, all_nozzles](auto &evt) {
                 if (m_filter_nozzles.empty()) {
@@ -600,11 +621,11 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 cb->SetForegroundColour(text_primary(dark));
                 if (is_active && m_filter_bases.size() == 1)
                     cb->Enable(false);
-                // Also disable if there's only one base profile available
-                if (dynamic_base_counts.size() == 1) {
+                if (dynamic_base_counts.size() == 1)
                     cb->Enable(false);
-                }
-                cb->SetForegroundColour(text_primary(dark));  // keep text readable even when disabled
+                if (m_filter_compatible_only)
+                    cb->Enable(false);
+                cb->SetForegroundColour(text_primary(dark));
                 cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first, all_bases](auto &evt) {
                     if (m_filter_bases.empty()) {
                         m_filter_bases = all_bases;
