@@ -490,7 +490,6 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
                 main_sizer->Add(cat_sizer, 0, wxLEFT | wxTOP, FromDIP(12));
 
                 auto *grid = new wxFlexGridSizer(3, FromDIP(2), FromDIP(16));
-                grid->AddGrowableCol(0, 2);
                 grid->AddGrowableCol(1, 1);
                 grid->AddGrowableCol(2, 1);
 
@@ -501,22 +500,37 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
                         label = def.label.empty() ? key : def.label;
                     }
 
-                    auto [base_val, base_tip] = simplify(parent_preset->config.opt_serialize(key));
-                    auto [override_val, override_tip] = simplify(preset->config.opt_serialize(key));
+                    std::string base_raw = parent_preset->config.opt_serialize(key);
+                    std::string over_raw = preset->config.opt_serialize(key);
+
+                    std::string base_display, base_tip, over_display, over_tip;
+
+                    if (key == "post_process") {
+                        // Show full path, no truncation
+                        base_display = base_raw;
+                        over_display = over_raw;
+                    } else {
+                        auto [bd, bt] = simplify(base_raw);
+                        auto [od, ot] = simplify(over_raw);
+                        base_display = bd; base_tip = bt;
+                        over_display = od; over_tip = ot;
+                    }
 
                     auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(label));
                     lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
                     lbl->SetForegroundColour(text_primary(dark));
 
-                    auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_val));
+                    auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_display));
                     base->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
                     base->SetForegroundColour(text_secondary(dark));
                     if (!base_tip.empty()) base->SetToolTip(from_u8(base_tip));
+                    base->Wrap(FromDIP(250));
 
-                    auto *over = new wxStaticText(panel, wxID_ANY, from_u8(override_val));
+                    auto *over = new wxStaticText(panel, wxID_ANY, from_u8(over_display));
                     over->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
                     over->SetForegroundColour(orange);
-                    if (!override_tip.empty()) over->SetToolTip(from_u8(override_tip));
+                    if (!over_tip.empty()) over->SetToolTip(from_u8(over_tip));
+                    over->Wrap(FromDIP(250));
 
                     grid->Add(lbl, 0, wxLEFT, FromDIP(24));
                     grid->Add(base, 1, wxEXPAND);
@@ -583,8 +597,8 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
             bool is_active = m_filter_nozzles.empty() || m_filter_nozzles.count(kv.first) > 0;
             cb->SetValue(is_active);
             cb->SetForegroundColour(text_primary(dark));
-            // Disable if this is the only one selected
-            if (is_active && m_filter_nozzles.size() == 1 && dynamic_nozzle_counts.size() == 1) {
+            // Disable if it's the only nozzle available or the last one selected
+            if (dynamic_nozzle_counts.size() == 1 || (m_filter_nozzles.size() == 1 && is_active)) {
                 cb->Enable(false);
                 cb->SetForegroundColour(text_primary(dark));
             }
@@ -594,8 +608,13 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 }
                 if (evt.IsChecked())
                     m_filter_nozzles.insert(nozzle);
-                else
+                else {
+                    if (m_filter_nozzles.size() <= 1) {
+                        static_cast<wxCheckBox*>(evt.GetEventObject())->SetValue(true);
+                        return;
+                    }
                     m_filter_nozzles.erase(nozzle);
+                }
                 if (m_filter_nozzles == all_nozzles)
                     m_filter_nozzles.clear();
                 m_filter_bases.clear();
