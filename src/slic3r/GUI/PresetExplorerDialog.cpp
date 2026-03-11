@@ -460,7 +460,7 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
                     if (part != first) { all_same = false; break; }
                     pos = next == std::string::npos ? check.size() : next + 1;
                 }
-                return all_same ? first : first + " (varies)";
+                return first;
             };
 
             std::string base_val = simplify(parent_preset->config.opt_serialize(key));
@@ -663,7 +663,7 @@ void PresetExplorerDialog::rebuild_visible_list()
     auto make_col_label = [&](const wxString &label, const std::string &sort_key, int width) {
         wxString display = label;
         if (m_sort_by == sort_key)
-            display += m_sort_ascending ? wxString::FromUTF8(" \xe2\x96\xb2") : wxString::FromUTF8(" \xe2\x96\xbc");
+            display += m_sort_ascending ? wxString::FromUTF8(" \xe2\x96\xbc") : wxString::FromUTF8(" \xe2\x96\xb2");
         auto *lbl = new wxStaticText(m_col_header, wxID_ANY, display,
             wxDefaultPosition, width > 0 ? wxSize(width, -1) : wxDefaultSize,
             width > 0 ? wxALIGN_RIGHT : 0);
