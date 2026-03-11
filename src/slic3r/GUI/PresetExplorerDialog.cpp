@@ -444,15 +444,16 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
             }
 
             // Simplify array values: "40,40,40,40" → "40"
-            auto simplify = [](const std::string &val) -> std::string {
+            auto simplify = [](const std::string &val) -> std::pair<std::string, std::string> {
+                // Returns {display, tooltip}. Tooltip empty if uniform.
                 auto comma = val.find(',');
                 if (comma == std::string::npos) {
-                    return val.length() > 60 ? val.substr(0, 57) + "..." : val;
+                    std::string v = val.length() > 60 ? val.substr(0, 57) + "..." : val;
+                    return {v, ""};
                 }
                 std::string first = val.substr(0, comma);
-                // Check if all comma-separated values are identical
-                std::string check = val;
                 bool all_same = true;
+                std::string check = val;
                 size_t pos = 0;
                 while (pos < check.size()) {
                     auto next = check.find(',', pos);
@@ -460,11 +461,22 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
                     if (part != first) { all_same = false; break; }
                     pos = next == std::string::npos ? check.size() : next + 1;
                 }
-                return first;
+                if (all_same) return {first, ""};
+                const char* vnames[] = {"Standard L", "High Flow L", "Standard R", "High Flow R"};
+                std::string tip = "Per-variant values:\n";
+                pos = 0; int i = 0;
+                while (pos < val.size()) {
+                    auto next = val.find(',', pos);
+                    std::string part = val.substr(pos, next == std::string::npos ? next : next - pos);
+                    tip += (i < 4 ? std::string(vnames[i]) : "Slot " + std::to_string(i+1)) + ": " + part + "\n";
+                    pos = next == std::string::npos ? val.size() : next + 1;
+                    i++;
+                }
+                return {first + " \xe2\x93\x98", tip};
             };
 
-            std::string base_val = simplify(parent_preset->config.opt_serialize(key));
-            std::string override_val = simplify(preset->config.opt_serialize(key));
+            auto [base_val, base_tip] = simplify(parent_preset->config.opt_serialize(key));
+            auto [override_val, override_tip] = simplify(preset->config.opt_serialize(key));
 
             auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(label));
             lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
@@ -473,10 +485,12 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
             auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_val));
             base->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
             base->SetForegroundColour(text_secondary(dark));
+            if (!base_tip.empty()) base->SetToolTip(from_u8(base_tip));
 
             auto *over = new wxStaticText(panel, wxID_ANY, from_u8(override_val));
             over->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
             over->SetForegroundColour(orange);
+            if (!override_tip.empty()) over->SetToolTip(from_u8(override_tip));
 
             grid->Add(lbl, 0);
             grid->Add(base, 1, wxEXPAND);
