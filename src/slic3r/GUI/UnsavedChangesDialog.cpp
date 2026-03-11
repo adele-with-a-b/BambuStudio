@@ -2052,7 +2052,7 @@ DiffPresetDialog::DiffPresetDialog(MainFrame* mainframe)
     wxGetApp().UpdateDlgDarkUI(this);
 }
 
-DiffPresetDialog::DiffPresetDialog(wxWindow* parent, Preset::Type type, const std::string &left, const std::string &right)
+DiffPresetDialog::DiffPresetDialog(wxWindow* parent, Preset::Type type, const std::string &left, const std::string &right, bool show_all)
     : DPIDialog(parent, wxID_ANY, _L("Compare presets"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
     m_pr_technology(wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology())
 {
@@ -2147,6 +2147,16 @@ DiffPresetDialog::DiffPresetDialog(wxWindow* parent, Preset::Type type, const st
     // Show only the requested type and pre-select presets
     m_view_type = type;
     update_controls_visibility(type);
+
+    // If either preset is incompatible, enable show_all so dropdowns include them
+    if (show_all) {
+        m_show_all_presets->SetValue(true);
+        for (auto &pc : m_preset_combos) {
+            if (pc.presets_left->get_type() == Preset::TYPE_PRINTER) continue;
+            pc.presets_left->show_all(true);
+            pc.presets_right->show_all(true);
+        }
+    }
 
     for (auto &pc : m_preset_combos) {
         if (pc.presets_left->get_type() != type)

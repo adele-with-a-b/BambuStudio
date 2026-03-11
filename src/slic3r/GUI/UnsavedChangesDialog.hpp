@@ -446,7 +446,7 @@ class DiffPresetDialog : public DPIDialog
 
 public:
     DiffPresetDialog(MainFrame* mainframe);
-    DiffPresetDialog(wxWindow* parent, Preset::Type type, const std::string &left, const std::string &right);
+    DiffPresetDialog(wxWindow* parent, Preset::Type type, const std::string &left, const std::string &right, bool show_all = false);
     ~DiffPresetDialog(){};
 
     void                    show(Preset::Type type = Preset::TYPE_INVALID);

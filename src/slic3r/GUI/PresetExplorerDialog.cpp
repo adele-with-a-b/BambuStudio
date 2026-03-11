@@ -219,7 +219,12 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_btn_compare->SetBorderColorNormal(wxColor("#00AE42"));
     m_btn_compare->SetTextColorNormal(wxColor("#00AE42"));
     m_btn_compare->Enable(false);
-    m_btn_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) { on_compare_checked(); });
+    m_btn_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
+        on_compare_checked();
+        // Reset button visual state after modal closes
+        m_btn_compare->SetBackgroundColor(GetBackgroundColour());
+        m_btn_compare->Refresh();
+    });
 
     m_btn_delete = new Button(this, _L("Delete"));
     m_btn_delete->SetBorderColorNormal(wxColor("#D01B1B"));
@@ -290,14 +295,14 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     badge->SetForegroundColour(text_secondary(dark));
     badge->SetBackgroundColour(badge_bg(dark));
 
-    // Right side: key info chips
+    // Right side: key info in fixed-width columns
     auto *info_sizer = new wxBoxSizer(wxHORIZONTAL);
+    int chip_width = FromDIP(55);
     auto add_chip = [&](const std::string &text) {
-        if (text.empty()) return;
-        auto *chip = new wxStaticText(card, wxID_ANY, from_u8(text));
+        auto *chip = new wxStaticText(card, wxID_ANY, from_u8(text), wxDefaultPosition, wxSize(chip_width, -1), wxALIGN_RIGHT);
         chip->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
         chip->SetForegroundColour(text_secondary(dark));
-        info_sizer->Add(chip, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(10));
+        info_sizer->Add(chip, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
     };
 
     if (m_collection == 2) {  // Process
@@ -305,7 +310,7 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
         add_chip(data.walls.empty() ? "" : data.walls + "w");
         add_chip(data.infill);
         add_chip(data.nozzle + "mm");
-        if (data.has_postprocess) add_chip("PP");
+        add_chip(data.has_postprocess ? "PP" : "");
     } else if (m_collection == 1) {  // Filament
         add_chip(data.material_type);
         add_chip(data.nozzle_temp);
@@ -645,8 +650,16 @@ void PresetExplorerDialog::on_compare_checked()
     auto it = m_checked_presets.begin();
     std::string left = *it++;
     std::string right = *it;
+
+    // Check if either preset is incompatible
+    bool needs_show_all = false;
+    for (auto &d : m_all_data[m_collection]) {
+        if ((d.name == left || d.name == right) && !d.is_compatible)
+            needs_show_all = true;
+    }
+
     Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
-    DiffPresetDialog dlg(this, types[m_collection], left, right);
+    DiffPresetDialog dlg(this, types[m_collection], left, right, needs_show_all);
     dlg.ShowModal();
 }
 
