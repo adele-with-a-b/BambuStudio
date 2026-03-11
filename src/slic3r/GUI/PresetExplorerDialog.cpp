@@ -264,7 +264,9 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_btn_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
         on_compare_checked();
         m_btn_compare->SetBackgroundColor(GetBackgroundColour());
+        m_btn_delete->SetBackgroundColor(GetBackgroundColour());
         m_btn_compare->Refresh();
+        m_btn_delete->Refresh();
     });
 
     m_btn_delete = new Button(this, _L("Delete"));
@@ -752,6 +754,15 @@ void PresetExplorerDialog::on_preset_checked(const std::string &name, bool check
 
     m_btn_delete->Enable(!m_checked_presets.empty());
     m_btn_compare->Enable(m_checked_presets.size() == 2);
+
+    // Sync select all checkbox
+    if (m_select_all) {
+        if (m_checked_presets.size() == m_visible_indices.size())
+            m_select_all->SetValue(true);
+        else
+            m_select_all->SetValue(false);
+    }
+
     m_status_text->SetLabel(m_checked_presets.empty()
         ? wxString::Format(_L("%zu presets"), m_visible_indices.size())
         : wxString::Format(_L("%zu selected"), m_checked_presets.size()));
