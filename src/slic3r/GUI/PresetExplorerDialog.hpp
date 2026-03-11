@@ -89,6 +89,7 @@ private:
     // UI state
     std::string m_search_text;
     std::string m_sort_by = "name";  // "name", "modified", "layer_height", "base", "material"
+    bool m_sort_ascending = true;
     std::set<std::string> m_checked_presets;
     std::string m_expanded_preset;  // only one expanded at a time
 

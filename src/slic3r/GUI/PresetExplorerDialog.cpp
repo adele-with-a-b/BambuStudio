@@ -181,17 +181,11 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_search->Bind(wxEVT_TEXT, [this](auto &evt) { on_search(evt.GetString()); });
 
     m_sort_choice = new wxChoice(this, wxID_ANY);
-    m_sort_choice->Append(_L("Name"));
-    m_sort_choice->Append(_L("Base Profile"));
-    m_sort_choice->Append(_L("Layer Height"));
-    m_sort_choice->Append(_L("Compatibility"));
-    m_sort_choice->SetSelection(0);
-    m_sort_choice->Bind(wxEVT_CHOICE, [this](auto &evt) { on_sort_changed(evt.GetSelection()); });
+    // Not used anymore — replaced by column headers
+    m_sort_choice->Hide();
 
     wxBoxSizer *top_bar = new wxBoxSizer(wxHORIZONTAL);
-    top_bar->Add(m_search, 1, wxALIGN_CENTER | wxRIGHT, FromDIP(10));
-    top_bar->Add(new wxStaticText(this, wxID_ANY, _L("Sort:")), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(5));
-    top_bar->Add(m_sort_choice, 0, wxALIGN_CENTER);
+    top_bar->Add(m_search, 1, wxALIGN_CENTER);
 
     // Filter panel (left side)
     m_filter_panel = new wxPanel(this);
@@ -224,7 +218,64 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     }
 
     // Content area: filter | list/empty
+    // Column header bar
+    auto *col_header = new wxPanel(this);
+    col_header->SetBackgroundColour(dark ? wxColour(55, 55, 55) : wxColour(235, 235, 235));
+    auto *col_sizer = new wxBoxSizer(wxHORIZONTAL);
+    int chip_width = FromDIP(55);
+
+    auto make_col_label = [&](const wxString &label, const std::string &sort_key, int width) -> wxStaticText* {
+        wxString display = label;
+        if (m_sort_by == sort_key)
+            display += m_sort_ascending ? " \u25B2" : " \u25BC";
+        auto *lbl = new wxStaticText(col_header, wxID_ANY, display,
+            wxDefaultPosition, width > 0 ? wxSize(width, -1) : wxDefaultSize,
+            width > 0 ? wxALIGN_RIGHT : 0);
+        lbl->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        lbl->SetForegroundColour(text_secondary(dark));
+        lbl->SetCursor(wxCursor(wxCURSOR_HAND));
+        lbl->Bind(wxEVT_LEFT_UP, [this, sort_key](auto &) {
+            if (m_sort_by == sort_key)
+                m_sort_ascending = !m_sort_ascending;
+            else {
+                m_sort_by = sort_key;
+                m_sort_ascending = true;
+            }
+            apply_filters();
+            rebuild_visible_list();
+            // Rebuild column headers to update arrow
+            // (handled by next rebuild cycle)
+        });
+        return lbl;
+    };
+
+    // Spacer for checkbox + expand area
+    col_sizer->AddSpacer(FromDIP(50));
+    col_sizer->Add(make_col_label(_L("Name"), "name", 0), 1, wxALIGN_CENTER);
+    col_sizer->AddStretchSpacer();
+
+    if (m_collection == 2) {  // Process columns
+        col_sizer->Add(make_col_label(_L("Layer"), "layer_height", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        col_sizer->Add(make_col_label(_L("Walls"), "walls", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        col_sizer->Add(make_col_label(_L("Infill"), "infill", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        col_sizer->Add(make_col_label(_L("Nozzle"), "nozzle", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        auto *pp_lbl = new wxStaticText(col_header, wxID_ANY, _L("PP"), wxDefaultPosition, wxSize(chip_width, -1), wxALIGN_RIGHT);
+        pp_lbl->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        pp_lbl->SetForegroundColour(text_secondary(dark));
+        col_sizer->Add(pp_lbl, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(10));
+    } else if (m_collection == 1) {  // Filament columns
+        col_sizer->Add(make_col_label(_L("Material"), "material", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        col_sizer->Add(make_col_label(_L("Temp"), "nozzle_temp", chip_width), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        auto *cost_lbl = new wxStaticText(col_header, wxID_ANY, _L("Cost"), wxDefaultPosition, wxSize(chip_width, -1), wxALIGN_RIGHT);
+        cost_lbl->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+        cost_lbl->SetForegroundColour(text_secondary(dark));
+        col_sizer->Add(cost_lbl, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(10));
+    }
+
+    col_header->SetSizer(col_sizer);
+
     wxBoxSizer *right_sizer = new wxBoxSizer(wxVERTICAL);
+    right_sizer->Add(col_header, 0, wxEXPAND | wxBOTTOM, FromDIP(2));
     right_sizer->Add(m_list_panel, 1, wxEXPAND);
     right_sizer->Add(m_empty_panel, 1, wxEXPAND);
 
@@ -607,6 +658,19 @@ void PresetExplorerDialog::rebuild_visible_list()
         auto *card = create_preset_card(m_list_panel, d);
         m_card_panels[d.name] = card;
         m_list_sizer->Add(card, 0, wxEXPAND | wxBOTTOM, FromDIP(2));
+
+        // Restore expanded state
+        if (m_expanded_preset == d.name) {
+            auto *details = create_expanded_details(m_list_panel, d);
+            m_detail_panels[d.name] = details;
+            m_list_sizer->Add(details, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(2));
+        }
+
+        // Restore checked state
+        if (m_checked_presets.count(d.name)) {
+            auto it = m_card_checks.find(d.name);
+            if (it != m_card_checks.end()) it->second->SetValue(true);
+        }
     }
 
     m_status_text->SetLabel(wxString::Format(_L("%zu presets"), m_visible_indices.size()));
@@ -652,22 +716,31 @@ void PresetExplorerDialog::apply_filters()
 
     // Sort
     auto &all = m_all_data[m_collection];
-    if (m_sort_by == "name") {
-        std::sort(m_visible_indices.begin(), m_visible_indices.end(),
-            [&](size_t a, size_t b) { return all[a].name < all[b].name; });
-    } else if (m_sort_by == "base") {
-        std::sort(m_visible_indices.begin(), m_visible_indices.end(),
-            [&](size_t a, size_t b) { return all[a].inherits < all[b].inherits; });
-    } else if (m_sort_by == "layer_height") {
-        std::sort(m_visible_indices.begin(), m_visible_indices.end(),
-            [&](size_t a, size_t b) { return all[a].layer_height < all[b].layer_height; });
-    } else if (m_sort_by == "compatible") {
-        std::sort(m_visible_indices.begin(), m_visible_indices.end(),
-            [&](size_t a, size_t b) {
-                if (all[a].is_compatible != all[b].is_compatible) return all[a].is_compatible;
-                return all[a].name < all[b].name;
-            });
-    }
+    auto cmp = [&](size_t a, size_t b) -> bool {
+        bool result;
+        if (m_sort_by == "name")
+            result = all[a].name < all[b].name;
+        else if (m_sort_by == "base")
+            result = all[a].inherits < all[b].inherits;
+        else if (m_sort_by == "layer_height")
+            result = all[a].layer_height < all[b].layer_height;
+        else if (m_sort_by == "walls")
+            result = all[a].walls < all[b].walls;
+        else if (m_sort_by == "infill")
+            result = all[a].infill < all[b].infill;
+        else if (m_sort_by == "nozzle")
+            result = all[a].nozzle < all[b].nozzle;
+        else if (m_sort_by == "material")
+            result = all[a].material_type < all[b].material_type;
+        else if (m_sort_by == "nozzle_temp")
+            result = all[a].nozzle_temp < all[b].nozzle_temp;
+        else if (m_sort_by == "compatible")
+            result = all[a].is_compatible > all[b].is_compatible;
+        else
+            result = all[a].name < all[b].name;
+        return m_sort_ascending ? result : !result;
+    };
+    std::sort(m_visible_indices.begin(), m_visible_indices.end(), cmp);
 }
 
 void PresetExplorerDialog::on_search(const wxString &keyword)
