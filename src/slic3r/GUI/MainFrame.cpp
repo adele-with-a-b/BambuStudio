@@ -27,6 +27,7 @@
 #include "3DScene.hpp"
 #include "ParamsDialog.hpp"
 #include "UserPresetsDialog.hpp"
+#include "PresetExplorerDialog.hpp"
 #include "PrintHostDialogs.hpp"
 #include "wxExtensions.hpp"
 #include "GUI_ObjectList.hpp"
@@ -2748,7 +2749,7 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(
             fileMenu, wxID_ANY, _L("Batch Preset Management"), wxString::Format(_L("Batch Preset Management")),
             [this](wxCommandEvent &) {
-                UserPresetsDialog dlg(this);
+                PresetExplorerDialog dlg(this);
                 dlg.ShowModal();
             },
             "", nullptr);

@@ -28,7 +28,11 @@ fi
 
 echo "Building..."
 cd "$BUILD_DIR"
-cmake --build . --target BambuStudio --config Release -j10
+cmake --build . --target BambuStudio --config Release -j10 2>&1 | tee "$PROJECT_DIR/build.log"
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    echo "❌ Build failed. See build.log"
+    exit 1
+fi
 
 if [ "$1" = "build" ]; then
     echo "Build complete (skipping install)."
