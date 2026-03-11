@@ -216,6 +216,7 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_status_text->SetForegroundColour(text_secondary(dark));
 
     auto *select_all_check = new CheckBox(this);
+    m_select_all = select_all_check;
     auto *select_all_label = new wxStaticText(this, wxID_ANY, _L("Select All"));
     select_all_label->SetForegroundColour(text_primary(dark));
     select_all_check->Bind(wxEVT_TOGGLEBUTTON, [this, select_all_check](auto &evt) {
@@ -423,52 +424,66 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
     sizer->Add(compat_cb, 0, wxALL, FromDIP(8));
 
     if (m_collection == 2) {  // Process
-        // Nozzle filter
+        // Nozzle filter — checked = included, unchecked = excluded
+        // All checked by default (m_filter_nozzles empty = show all)
         add_section(_L("Nozzle"));
+        std::set<std::string> all_nozzles;
+        for (auto &kv : m_nozzle_counts) all_nozzles.insert(kv.first);
+
         for (auto &kv : m_nozzle_counts) {
             wxString text = from_u8(kv.first + "mm") + wxString::Format(" (%d)", kv.second);
             auto *cb = new wxCheckBox(parent, wxID_ANY, text);
-            cb->SetValue(m_filter_nozzles.empty() || m_filter_nozzles.count(kv.first) > 0);
+            bool is_active = m_filter_nozzles.empty() || m_filter_nozzles.count(kv.first) > 0;
+            cb->SetValue(is_active);
             cb->SetForegroundColour(text_primary(dark));
-            cb->Bind(wxEVT_CHECKBOX, [this, nozzle = kv.first](auto &evt) {
+            cb->Bind(wxEVT_CHECKBOX, [this, nozzle = kv.first, all_nozzles](auto &evt) {
+                if (m_filter_nozzles.empty()) {
+                    // First uncheck: switch from "all" to "all except this one"
+                    m_filter_nozzles = all_nozzles;
+                }
                 if (evt.IsChecked())
-                    m_filter_nozzles.erase(nozzle);
-                else
                     m_filter_nozzles.insert(nozzle);
-                // Rebuild sidebar to update base profile list dynamically
+                else
+                    m_filter_nozzles.erase(nozzle);
+                // If all are checked again, clear to mean "all"
+                if (m_filter_nozzles == all_nozzles)
+                    m_filter_nozzles.clear();
+                // Clear base filter when nozzle changes since bases depend on nozzle
+                m_filter_bases.clear();
                 on_filter_changed();
             });
             sizer->Add(cb, 0, wxLEFT, FromDIP(12));
         }
 
         // Base profile filter — dynamic based on nozzle selection
-        // Recompute which base profiles are visible given current nozzle filter
         std::map<std::string, int> dynamic_base_counts;
         for (auto &d : m_all_data[m_collection]) {
-            if (!m_filter_nozzles.empty() && m_filter_nozzles.count(d.nozzle) == 0)
-                continue;
-            dynamic_base_counts[d.inherits]++;
+            bool nozzle_ok = m_filter_nozzles.empty() || m_filter_nozzles.count(d.nozzle) > 0;
+            if (nozzle_ok)
+                dynamic_base_counts[d.inherits]++;
         }
 
         if (dynamic_base_counts.size() > 1) {
             add_section(_L("Base Profile"));
-            // Clean up stale base filter selections
-            for (auto it = m_filter_bases.begin(); it != m_filter_bases.end(); ) {
-                if (dynamic_base_counts.count(*it) == 0)
-                    it = m_filter_bases.erase(it);
-                else
-                    ++it;
-            }
+            std::set<std::string> all_bases;
+            for (auto &kv : dynamic_base_counts) all_bases.insert(kv.first);
+
             for (auto &kv : dynamic_base_counts) {
                 wxString text = from_u8(kv.first) + wxString::Format(" (%d)", kv.second);
                 auto *cb = new wxCheckBox(parent, wxID_ANY, text);
-                cb->SetValue(m_filter_bases.empty() || m_filter_bases.count(kv.first) > 0);
+                bool is_active = m_filter_bases.empty() || m_filter_bases.count(kv.first) > 0;
+                cb->SetValue(is_active);
                 cb->SetForegroundColour(text_primary(dark));
-                cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first](auto &evt) {
+                cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first, all_bases](auto &evt) {
+                    if (m_filter_bases.empty()) {
+                        m_filter_bases = all_bases;
+                    }
                     if (evt.IsChecked())
-                        m_filter_bases.erase(base);
-                    else
                         m_filter_bases.insert(base);
+                    else
+                        m_filter_bases.erase(base);
+                    if (m_filter_bases == all_bases)
+                        m_filter_bases.clear();
                     on_filter_changed();
                 });
                 sizer->Add(cb, 0, wxLEFT, FromDIP(12));
@@ -488,16 +503,25 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
     else if (m_collection == 1) {  // Filament
         if (m_material_counts.size() > 1) {
             add_section(_L("Material"));
+            std::set<std::string> all_mats;
+            for (auto &kv : m_material_counts) all_mats.insert(kv.first);
+
             for (auto &kv : m_material_counts) {
                 wxString text = from_u8(kv.first) + wxString::Format(" (%d)", kv.second);
                 auto *cb = new wxCheckBox(parent, wxID_ANY, text);
-                cb->SetValue(m_filter_materials.empty() || m_filter_materials.count(kv.first) > 0);
+                bool is_active = m_filter_materials.empty() || m_filter_materials.count(kv.first) > 0;
+                cb->SetValue(is_active);
                 cb->SetForegroundColour(text_primary(dark));
-                cb->Bind(wxEVT_CHECKBOX, [this, mat = kv.first](auto &evt) {
+                cb->Bind(wxEVT_CHECKBOX, [this, mat = kv.first, all_mats](auto &evt) {
+                    if (m_filter_materials.empty()) {
+                        m_filter_materials = all_mats;
+                    }
                     if (evt.IsChecked())
-                        m_filter_materials.erase(mat);
-                    else
                         m_filter_materials.insert(mat);
+                    else
+                        m_filter_materials.erase(mat);
+                    if (m_filter_materials == all_mats)
+                        m_filter_materials.clear();
                     on_filter_changed();
                 });
                 sizer->Add(cb, 0, wxLEFT, FromDIP(12));
@@ -631,6 +655,12 @@ void PresetExplorerDialog::on_tab_changed(int tab)
 
 void PresetExplorerDialog::on_filter_changed()
 {
+    // Clear selection when filters change
+    m_checked_presets.clear();
+    if (m_select_all) m_select_all->SetValue(false);
+    if (m_btn_delete) m_btn_delete->Enable(false);
+    if (m_btn_compare) m_btn_compare->Enable(false);
+
     // Rebuild filter sidebar (base profiles depend on nozzle selection)
     build_filter_panel(m_filter_panel, m_filter_sizer);
     apply_filters();

@@ -114,6 +114,7 @@ private:
     wxBoxSizer *m_list_sizer = nullptr;
     Button *m_btn_delete = nullptr;
     Button *m_btn_compare = nullptr;
+    CheckBox *m_select_all = nullptr;
     wxStaticText *m_status_text = nullptr;
 
     // Card widgets keyed by preset name
