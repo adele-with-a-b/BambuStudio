@@ -38,8 +38,8 @@ fi
 echo "Installing to $APP_DST..."
 APP_SRC="$BUILD_DIR/src/BambuStudio.app"
 
-# Fix resources symlink
-resources_path=$(readlink "$APP_SRC/Contents/Resources" 2>/dev/null)
+# Fix resources symlink if present
+resources_path=$(readlink "$APP_SRC/Contents/Resources" 2>/dev/null || true)
 if [ -L "$APP_SRC/Contents/Resources" ] && [ -n "$resources_path" ]; then
     rm "$APP_SRC/Contents/Resources"
     cp -R "$resources_path" "$APP_SRC/Contents/Resources"

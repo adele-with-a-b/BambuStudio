@@ -35,6 +35,14 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     m_search->SetCornerRadius(FromDIP(12));
     m_search->Bind(wxEVT_TEXT, [this](auto &evt) { on_search(evt.GetString()); });
 
+    // Compatible-only toggle
+    m_compatible_toggle = new SwitchButton(this);
+    m_compatible_toggle->SetFont(Label::Body_13);
+    m_compatible_toggle->SetMaxSize({FromDIP(220), -1});
+    m_compatible_toggle->SetLabels(_L("Compatible"), _L("All"));
+    m_compatible_toggle->SetValue(false);  // default: show all
+    m_compatible_toggle->Bind(wxEVT_TOGGLEBUTTON, [this](auto &evt) { evt.Skip(); on_compatible_toggle(evt.IsChecked()); });
+
     m_empty_panel = new wxPanel(this);
     m_empty_panel->SetMinSize({-1, FromDIP(360)});
     m_empty_panel->SetMaxSize({-1, FromDIP(360)});
@@ -93,16 +101,18 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     sizer->Add(m_tab_ctrl, 0, wxALIGN_CENTER | wxALL, FromDIP(20));
     sizer->Add(m_switch_button, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
     sizer->Add(m_search, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
+    sizer->Add(m_compatible_toggle, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
     sizer->Add(m_scrolled, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(20));
     sizer->Add(m_empty_panel, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(20));
     sizer->Add(sizer_bottom, 0, wxEXPAND | wxALL, FromDIP(20));
 
     wxGetApp().UpdateDlgDarkUI(this);
     m_switch_button->Rescale();
+    m_compatible_toggle->Rescale();
 
     init_preset_list();
     create_nozzle_filter_buttons(this);
-    sizer->Insert(3, m_nozzle_filter_sizer, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
+    sizer->Insert(4, m_nozzle_filter_sizer, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
 
     update_preset_counts();
     on_collection_changed(0);
@@ -135,6 +145,9 @@ void UserPresetsDialog::init_preset_list()
                 m_preset_inherits[preset.name] = inherits;
                 m_preset_nozzle[preset.name] = get_nozzle_for_preset(inherits);
             }
+
+            // Capture compatibility for all preset types
+            m_preset_compatible[preset.name] = preset.is_compatible;
         }
         m_presets.emplace_back(std::move(presets));
     }
@@ -213,14 +226,82 @@ void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
         m_nozzle_buttons[i]->Refresh();
     }
 
-    // Apply filter: hide/show presets based on nozzle
-    if (m_collection == 2) {  // Process tab
-        m_scrolled->Freeze();
-        for (auto &preset : m_presets[2]) {
+    apply_filters();
+}
+
+void UserPresetsDialog::on_compatible_toggle(bool compatible_only)
+{
+    apply_filters();
+}
+
+void UserPresetsDialog::apply_filters()
+{
+    bool compatible_only = m_compatible_toggle && m_compatible_toggle->GetValue();
+
+    m_scrolled->Freeze();
+
+    // Determine which presets to show based on current collection
+    if (is_filament_list()) {
+        for (auto &filament : m_filament_presets) {
+            size_t visible = 0;
+            for (auto &preset : filament.second) {
+                auto sizer_it = m_preset_sizers.find(preset);
+                if (sizer_it == m_preset_sizers.end()) continue;
+
+                bool show = !compatible_only || m_preset_compatible[preset];
+                if (!show) {
+                    if (m_hiden_sizers.find(sizer_it->second) == m_hiden_sizers.end()) {
+                        sizer_it->second->Show(false);
+                        m_hiden_sizers.insert(sizer_it->second);
+                    }
+                } else {
+                    visible++;
+                    auto it = m_hiden_sizers.find(sizer_it->second);
+                    if (it != m_hiden_sizers.end()) {
+                        sizer_it->second->Show(true);
+                        m_hiden_sizers.erase(it);
+                    }
+                }
+            }
+            // Hide group header if all children hidden
+            auto group_it = m_filament_sizers.find(filament.first);
+            if (group_it != m_filament_sizers.end()) {
+                if (visible == 0) {
+                    if (m_hiden_sizers.find(group_it->second) == m_hiden_sizers.end()) {
+                        group_it->second->Show(false);
+                        m_hiden_sizers.insert(group_it->second);
+                    }
+                } else {
+                    auto it = m_hiden_sizers.find(group_it->second);
+                    if (it != m_hiden_sizers.end()) {
+                        group_it->second->Show(true);
+                        m_hiden_sizers.erase(it);
+                    }
+                }
+            }
+        }
+    } else {
+        auto &presets = m_presets[m_collection];
+        for (auto &preset : presets) {
             auto sizer_it = m_preset_sizers.find(preset);
             if (sizer_it == m_preset_sizers.end()) continue;
 
-            bool show = nozzle.empty() || m_preset_nozzle[preset] == nozzle;
+            bool show = true;
+
+            // Nozzle filter (process tab only)
+            if (m_collection == 2 && !m_nozzle_filter.empty()) {
+                auto nozzle_it = m_preset_nozzle.find(preset);
+                if (nozzle_it != m_preset_nozzle.end() && nozzle_it->second != m_nozzle_filter)
+                    show = false;
+            }
+
+            // Compatible filter
+            if (show && compatible_only) {
+                auto compat_it = m_preset_compatible.find(preset);
+                if (compat_it != m_preset_compatible.end() && !compat_it->second)
+                    show = false;
+            }
+
             if (!show) {
                 if (m_hiden_sizers.find(sizer_it->second) == m_hiden_sizers.end()) {
                     sizer_it->second->Show(false);
@@ -233,13 +314,11 @@ void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
                     m_hiden_sizers.erase(it);
                 }
             }
-
-            // Also hide group headers if all their children are hidden
-            // (handled by layout_preset_list)
         }
-        layout_preset_list();
-        m_scrolled->Thaw();
     }
+
+    layout_preset_list();
+    m_scrolled->Thaw();
 }
 
 void UserPresetsDialog::create_preset_list(wxWindow *parent)

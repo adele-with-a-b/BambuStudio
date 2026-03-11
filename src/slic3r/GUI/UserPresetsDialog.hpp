@@ -66,6 +66,10 @@ private:
     void on_nozzle_filter_changed(const std::string &nozzle);
     void create_nozzle_filter_buttons(wxWindow *parent);
 
+    // Phase 2: compatible-only toggle
+    void on_compatible_toggle(bool compatible_only);
+    void apply_filters();
+
 private:
     TabCtrl * m_tab_ctrl;
     SwitchButton * m_switch_button;
@@ -85,6 +89,10 @@ private:
     std::vector<Button *> m_nozzle_buttons;
     std::map<std::string, std::string> m_preset_inherits;  // preset name → inherits value
     std::map<std::string, std::string> m_preset_nozzle;    // preset name → nozzle size string
+
+    // Phase 2: compatible-only toggle
+    SwitchButton * m_compatible_toggle = nullptr;
+    std::map<std::string, bool> m_preset_compatible;  // preset name → is_compatible
 
 private:
     std::vector<std::vector<std::string>> m_presets;
