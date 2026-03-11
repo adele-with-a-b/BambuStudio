@@ -2098,6 +2098,23 @@ void DiffPresetDialog::show(Preset::Type type /* = Preset::TYPE_INVALID*/)
     Show();
 }
 
+void DiffPresetDialog::show(Preset::Type type, const std::string &left, const std::string &right)
+{
+    show(type);
+
+    // Pre-select the requested presets in the combo boxes
+    for (auto &preset_combos : m_preset_combos) {
+        if (preset_combos.presets_left->get_type() != type)
+            continue;
+        if (!left.empty())
+            preset_combos.presets_left->update(left);
+        if (!right.empty())
+            preset_combos.presets_right->update(right);
+        break;
+    }
+    update_tree();
+}
+
 void DiffPresetDialog::update_presets(Preset::Type type)
 {
     m_pr_technology = m_preset_bundle_left.get()->printers.get_edited_preset().printer_technology();

@@ -97,8 +97,10 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     m_button_compare->SetTextColorNormal(wxColor("#00AE42"));
     m_button_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
         Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
-        this->EndModal(wxID_OK);
-        wxGetApp().mainframe->diff_dialog.show(types[m_collection]);
+        std::string left, right;
+        if (m_checked_presets.size() >= 1) left = m_checked_presets[0];
+        if (m_checked_presets.size() >= 2) right = m_checked_presets[1];
+        wxGetApp().mainframe->diff_dialog.show(types[m_collection], left, right);
     });
 
     wxSizer *sizer_bottom = new wxBoxSizer(wxHORIZONTAL);

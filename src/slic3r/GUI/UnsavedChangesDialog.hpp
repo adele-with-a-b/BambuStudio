@@ -449,6 +449,7 @@ public:
     ~DiffPresetDialog(){};
 
     void                    show(Preset::Type type = Preset::TYPE_INVALID);
+    void                    show(Preset::Type type, const std::string &left, const std::string &right);
     void                    update_presets(Preset::Type type = Preset::TYPE_INVALID);
 
 protected:
