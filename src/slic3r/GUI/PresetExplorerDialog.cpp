@@ -438,8 +438,10 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
             cb->SetValue(is_active);
             cb->SetForegroundColour(text_primary(dark));
             // Disable if this is the only one selected — grayed out, can't uncheck
-            if (is_active && m_filter_nozzles.size() == 1)
+            if (is_active && m_filter_nozzles.size() == 1) {
                 cb->Enable(false);
+                cb->SetForegroundColour(text_primary(dark));  // keep text readable
+            }
             cb->Bind(wxEVT_CHECKBOX, [this, nozzle = kv.first, all_nozzles](auto &evt) {
                 if (m_filter_nozzles.empty()) {
                     m_filter_nozzles = all_nozzles;
@@ -477,6 +479,11 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 cb->SetForegroundColour(text_primary(dark));
                 if (is_active && m_filter_bases.size() == 1)
                     cb->Enable(false);
+                // Also disable if there's only one base profile available
+                if (dynamic_base_counts.size() == 1) {
+                    cb->Enable(false);
+                }
+                cb->SetForegroundColour(text_primary(dark));  // keep text readable even when disabled
                 cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first, all_bases](auto &evt) {
                     if (m_filter_bases.empty()) {
                         m_filter_bases = all_bases;
