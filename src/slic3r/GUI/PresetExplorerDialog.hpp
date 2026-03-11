@@ -114,13 +114,13 @@ private:
     wxBoxSizer *m_list_sizer = nullptr;
     Button *m_btn_delete = nullptr;
     Button *m_btn_compare = nullptr;
-    CheckBox *m_select_all = nullptr;
+    ::CheckBox *m_select_all = nullptr;
     wxStaticText *m_status_text = nullptr;
 
     // Card widgets keyed by preset name
     std::map<std::string, wxPanel *> m_card_panels;
     std::map<std::string, wxPanel *> m_detail_panels;
-    std::map<std::string, CheckBox *> m_card_checks;
+    std::map<std::string, ::CheckBox *> m_card_checks;
 };
 
 }}

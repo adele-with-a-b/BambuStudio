@@ -2,6 +2,7 @@
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
+#include "Tab.hpp"
 #include "UnsavedChangesDialog.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
@@ -215,7 +216,7 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_status_text = new wxStaticText(this, wxID_ANY, "");
     m_status_text->SetForegroundColour(text_secondary(dark));
 
-    auto *select_all_check = new CheckBox(this);
+    auto *select_all_check = new ::CheckBox(this);
     m_select_all = select_all_check;
     auto *select_all_label = new wxStaticText(this, wxID_ANY, _L("Select All"));
     select_all_label->SetForegroundColour(text_primary(dark));
@@ -292,7 +293,7 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     auto *hsizer = new wxBoxSizer(wxHORIZONTAL);
 
     // Checkbox
-    auto *check = new CheckBox(card);
+    auto *check = new ::CheckBox(card);
     check->Bind(wxEVT_TOGGLEBUTTON, [this, name = data.name](auto &evt) {
         evt.Skip();
         on_preset_checked(name, evt.IsChecked());
@@ -436,25 +437,19 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
             bool is_active = m_filter_nozzles.empty() || m_filter_nozzles.count(kv.first) > 0;
             cb->SetValue(is_active);
             cb->SetForegroundColour(text_primary(dark));
+            // Disable if this is the only one selected — grayed out, can't uncheck
+            if (is_active && m_filter_nozzles.size() == 1)
+                cb->Enable(false);
             cb->Bind(wxEVT_CHECKBOX, [this, nozzle = kv.first, all_nozzles](auto &evt) {
                 if (m_filter_nozzles.empty()) {
-                    // First uncheck: switch from "all" to "all except this one"
                     m_filter_nozzles = all_nozzles;
                 }
                 if (evt.IsChecked())
                     m_filter_nozzles.insert(nozzle);
-                else {
-                    // Don't allow unchecking the last one
-                    if (m_filter_nozzles.size() <= 1) {
-                        static_cast<wxCheckBox*>(evt.GetEventObject())->SetValue(true);
-                        return;
-                    }
+                else
                     m_filter_nozzles.erase(nozzle);
-                }
-                // If all are checked again, clear to mean "all"
                 if (m_filter_nozzles == all_nozzles)
                     m_filter_nozzles.clear();
-                // Clear base filter when nozzle changes since bases depend on nozzle
                 m_filter_bases.clear();
                 on_filter_changed();
             });
@@ -480,19 +475,16 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 bool is_active = m_filter_bases.empty() || m_filter_bases.count(kv.first) > 0;
                 cb->SetValue(is_active);
                 cb->SetForegroundColour(text_primary(dark));
+                if (is_active && m_filter_bases.size() == 1)
+                    cb->Enable(false);
                 cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first, all_bases](auto &evt) {
                     if (m_filter_bases.empty()) {
                         m_filter_bases = all_bases;
                     }
                     if (evt.IsChecked())
                         m_filter_bases.insert(base);
-                    else {
-                        if (m_filter_bases.size() <= 1) {
-                            static_cast<wxCheckBox*>(evt.GetEventObject())->SetValue(true);
-                            return;
-                        }
+                    else
                         m_filter_bases.erase(base);
-                    }
                     if (m_filter_bases == all_bases)
                         m_filter_bases.clear();
                     on_filter_changed();
@@ -735,7 +727,7 @@ void PresetExplorerDialog::on_preset_checked(const std::string &name, bool check
         m_checked_presets.erase(name);
 
     m_btn_delete->Enable(!m_checked_presets.empty());
-    m_btn_compare->Enable(m_checked_presets.size() >= 2);
+    m_btn_compare->Enable(m_checked_presets.size() == 2);
     m_status_text->SetLabel(m_checked_presets.empty()
         ? wxString::Format(_L("%zu presets"), m_visible_indices.size())
         : wxString::Format(_L("%zu selected"), m_checked_presets.size()));
@@ -743,7 +735,55 @@ void PresetExplorerDialog::on_preset_checked(const std::string &name, bool check
 
 void PresetExplorerDialog::on_delete_checked()
 {
-    // TODO: implement delete using existing Tab::delete_preset logic
+    if (m_checked_presets.empty()) return;
+
+    // Confirm
+    wxString msg = wxString::Format(_L("Delete %zu selected preset(s)?"), m_checked_presets.size());
+    wxMessageDialog dlg(this, msg, _L("Confirm Delete"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+    if (dlg.ShowModal() != wxID_YES) return;
+
+    Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
+    Preset::Type type = types[m_collection];
+    Tab *tab = wxGetApp().get_tab(type);
+    if (!tab) return;
+
+    auto *collection = tab->get_presets();
+    std::string current_name = collection->get_edited_preset().name;
+    bool deleted_current = false;
+
+    for (auto &name : m_checked_presets) {
+        if (name == current_name) {
+            deleted_current = true;
+            continue;  // delete current last
+        }
+        auto *preset = collection->find_preset(name, false);
+        if (preset && !preset->is_default && !preset->is_system) {
+            if (!preset->setting_id.empty()) {
+                collection->set_sync_info_and_save(name, preset->setting_id, "delete", 0);
+                wxGetApp().delete_preset_from_cloud(preset->setting_id);
+            }
+            collection->delete_preset(name);
+        }
+    }
+
+    if (deleted_current)
+        tab->select_preset("", true);
+    else
+        wxGetApp().plater()->sidebar().update_presets(type);
+
+    // Refresh data and rebuild
+    m_checked_presets.clear();
+    if (m_select_all) m_select_all->SetValue(false);
+    m_btn_delete->Enable(false);
+    m_btn_compare->Enable(false);
+    m_all_data.clear();
+    m_nozzle_counts.clear();
+    m_base_counts.clear();
+    m_material_counts.clear();
+    init_preset_data();
+    build_filter_panel(m_filter_panel, m_filter_sizer);
+    apply_filters();
+    rebuild_visible_list();
 }
 
 void PresetExplorerDialog::on_compare_checked()
