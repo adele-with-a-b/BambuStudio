@@ -251,7 +251,7 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
             if (it != m_card_checks.end()) it->second->SetValue(checked);
         }
         m_btn_delete->Enable(!m_checked_presets.empty());
-        m_btn_compare->Enable(m_checked_presets.size() >= 2);
+        m_btn_compare->Enable(m_checked_presets.size() == 2);
         m_status_text->SetLabel(m_checked_presets.empty()
             ? wxString::Format(_L("%zu presets"), m_visible_indices.size())
             : wxString::Format(_L("%zu selected"), m_checked_presets.size()));
