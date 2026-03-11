@@ -2056,50 +2056,84 @@ DiffPresetDialog::DiffPresetDialog(wxWindow* parent, Preset::Type type, const st
     : DPIDialog(parent, wxID_ANY, _L("Compare presets"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
     m_pr_technology(wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology())
 {
+#if defined(__WXMSW__)
+    this->SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT));
+#endif
+    int border = 10;
+    int em = em_unit();
+    SetBackgroundColour(*wxWHITE);
+
     m_preset_bundle_left  = std::make_unique<PresetBundle>(*wxGetApp().preset_bundle);
     m_preset_bundle_right = std::make_unique<PresetBundle>(*wxGetApp().preset_bundle);
 
-    int border = 10;
-    int em = em_unit();
-
-    m_top_info_line = new wxStaticText(this, wxID_ANY, "");
+    m_top_info_line = new wxStaticText(this, wxID_ANY, _L("Select presets to compare"));
+    m_top_info_line->SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
     m_bottom_info_line = new wxStaticText(this, wxID_ANY, "");
+    m_bottom_info_line->SetFont(wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT).Bold());
+
+    wxBoxSizer* presets_sizer = new wxBoxSizer(wxVERTICAL);
+
+    // Create combo rows for all types (same as original), hide non-matching ones
+    for (auto new_type : { Preset::TYPE_PRINT, Preset::TYPE_FILAMENT, Preset::TYPE_SLA_PRINT, Preset::TYPE_SLA_MATERIAL, Preset::TYPE_PRINTER })
+    {
+        const PresetCollection* collection = get_preset_collection(new_type);
+        wxBoxSizer* sizer = new wxBoxSizer(wxHORIZONTAL);
+        PresetComboBox* presets_left;
+        PresetComboBox* presets_right;
+        ScalableButton* equal_bmp = new ScalableButton(this, wxID_ANY, "equal");
+
+        auto add_preset_combobox = [collection, sizer, new_type, em, this](PresetComboBox** cb_, PresetBundle* preset_bundle) {
+            *cb_ = new PresetComboBox(this, new_type, wxSize(em * 35, -1), preset_bundle);
+            PresetComboBox* cb = (*cb_);
+            cb->set_selection_changed_function([this, new_type, preset_bundle, cb](int selection) {
+                if (m_view_type == Preset::TYPE_INVALID) {
+                    std::string preset_name = cb->GetString(selection).ToUTF8().data();
+                    update_compatibility(Preset::remove_suffix_modified(preset_name), new_type, preset_bundle);
+                }
+                update_tree();
+            });
+            if (collection->get_selected_idx() != (size_t)-1)
+                cb->update(collection->get_selected_preset().name);
+            sizer->Add(cb, 1);
+            cb->Show(new_type == Preset::TYPE_PRINTER);
+        };
+        add_preset_combobox(&presets_left, m_preset_bundle_left.get());
+        sizer->Add(equal_bmp, 0, wxRIGHT | wxLEFT | wxALIGN_CENTER_VERTICAL, 5);
+        add_preset_combobox(&presets_right, m_preset_bundle_right.get());
+        presets_sizer->Add(sizer, 1, wxTOP, 5);
+        equal_bmp->Show(new_type == Preset::TYPE_PRINTER);
+
+        m_preset_combos.push_back({ presets_left, equal_bmp, presets_right });
+
+        equal_bmp->Bind(wxEVT_BUTTON, [presets_left, presets_right, this](wxEvent&) {
+            std::string preset_name = get_selection(presets_left);
+            presets_right->update(preset_name);
+            if (m_view_type == Preset::TYPE_INVALID)
+                update_compatibility(Preset::remove_suffix_modified(preset_name), presets_right->get_type(), m_preset_bundle_right.get());
+            update_tree();
+        });
+    }
+
+    m_show_all_presets = new wxCheckBox(this, wxID_ANY, _L("Show all presets (including incompatible)"));
+    m_show_all_presets->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
+        bool show_all = m_show_all_presets->GetValue();
+        for (auto preset_combos : m_preset_combos) {
+            if (preset_combos.presets_left->get_type() == Preset::TYPE_PRINTER)
+                continue;
+            preset_combos.presets_left->show_all(show_all);
+            preset_combos.presets_right->show_all(show_all);
+        }
+        if (m_view_type == Preset::TYPE_INVALID)
+            update_tree();
+    });
 
     m_tree = new DiffViewCtrl(this, wxSize(em * 65, em * 40));
     m_tree->AppendBmpTextColumn("",                  DiffModel::colIconText, 35);
     m_tree->AppendBmpTextColumn("Left Preset Value", DiffModel::colOldValue, 15);
     m_tree->AppendBmpTextColumn("Right Preset Value",DiffModel::colNewValue, 15);
+    m_tree->Hide();
 
-    // Create combo boxes for the target type only
-    wxFlexGridSizer *presets_sizer = new wxFlexGridSizer(3, 2, border, border);
-    presets_sizer->AddGrowableCol(0, 1);
-    presets_sizer->AddGrowableCol(2, 1);
-
-    auto add_preset_combobox = [this, presets_sizer, type](PresetComboBox** cb, PresetBundle* bundle) {
-        *cb = new PresetComboBox(this, type);
-        (*cb)->set_selection_changed_function([this](int) { update_tree(); });
-        (*cb)->SetFont(Label::Body_13);
-        presets_sizer->Add(*cb, 1, wxEXPAND);
-    };
-
-    PresetComboBox *presets_left, *presets_right;
-    add_preset_combobox(&presets_left, m_preset_bundle_left.get());
-    auto equal_bmp = new ScalableButton(this, wxID_ANY, "equal");
-    presets_sizer->Add(equal_bmp, 0, wxALIGN_CENTER);
-    add_preset_combobox(&presets_right, m_preset_bundle_right.get());
-    m_preset_combos.push_back({presets_left, equal_bmp, presets_right});
-
-    m_show_all_presets = new wxCheckBox(this, wxID_ANY, _L("Show all presets (including incompatible)"));
-    m_show_all_presets->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
-        bool show_all = m_show_all_presets->GetValue();
-        for (auto &pc : m_preset_combos) {
-            pc.presets_left->show_all(show_all);
-            pc.presets_right->show_all(show_all);
-        }
-        update_tree();
-    });
-
-    wxBoxSizer *topSizer = new wxBoxSizer(wxVERTICAL);
+    wxBoxSizer* topSizer = new wxBoxSizer(wxVERTICAL);
     topSizer->Add(m_top_info_line, 0, wxEXPAND | wxLEFT | wxTOP | wxRIGHT, 2 * border);
     topSizer->Add(presets_sizer, 0, wxEXPAND | wxLEFT | wxTOP | wxRIGHT, border);
     topSizer->Add(m_show_all_presets, 0, wxEXPAND | wxALL, border);
@@ -2110,11 +2144,17 @@ DiffPresetDialog::DiffPresetDialog(wxWindow* parent, Preset::Type type, const st
     this->SetSizer(topSizer);
     topSizer->SetSizeHints(this);
 
+    // Show only the requested type and pre-select presets
     m_view_type = type;
     update_controls_visibility(type);
 
-    if (!left.empty())  presets_left->update(left);
-    if (!right.empty()) presets_right->update(right);
+    for (auto &pc : m_preset_combos) {
+        if (pc.presets_left->get_type() != type)
+            continue;
+        if (!left.empty())  pc.presets_left->update(left);
+        if (!right.empty()) pc.presets_right->update(right);
+        break;
+    }
     update_tree();
 
     wxGetApp().UpdateDlgDarkUI(this);
