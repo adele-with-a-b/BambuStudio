@@ -6,6 +6,7 @@
 #include "UnsavedChangesDialog.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include "Widgets/CheckBox.hpp"
 #include "Widgets/Label.hpp"
 #include "Widgets/TabCtrl.hpp"
@@ -434,61 +435,98 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
     auto *panel = new wxPanel(parent);
     panel->SetBackgroundColour(dark ? wxColour(45, 45, 45) : wxColour(240, 240, 240));
 
-    auto *grid = new wxFlexGridSizer(2, FromDIP(4), FromDIP(20));
-    grid->AddGrowableCol(1, 1);
+    wxColour orange("#F1754E");
 
-    // Find the preset and its parent to compute overrides
+    // 3-column grid: Setting | Base Value | Override Value
+    auto *grid = new wxFlexGridSizer(3, FromDIP(3), FromDIP(12));
+    grid->AddGrowableCol(1, 1);
+    grid->AddGrowableCol(2, 1);
+
     auto bundle = wxGetApp().preset_bundle;
-    Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
     PresetCollection *collection = nullptr;
     if (m_collection == 0) collection = &bundle->printers;
     else if (m_collection == 1) collection = &bundle->filaments;
     else collection = &bundle->prints;
 
     auto *preset = collection->find_preset(data.name, false);
-    if (preset) {
-        const Preset *parent_preset = collection->get_preset_base(*preset);
+    if (!preset) {
+        panel->SetSizer(new wxBoxSizer(wxVERTICAL));
+        return panel;
+    }
 
-        if (parent_preset && parent_preset != preset) {
-            auto diff_keys = preset->config.diff(parent_preset->config);
+    const Preset *parent_preset = collection->get_preset_base(*preset);
 
-            // Skip internal/meta keys
-            static const std::set<std::string> skip_keys = {
-                "inherits", "from", "name", "print_settings_id", "filament_settings_id",
-                "printer_settings_id", "version", "print_extruder_id", "print_extruder_variant",
-                "filament_extruder_variant", "compatible_printers", "compatible_printers_condition",
-                "compatible_prints", "compatible_prints_condition"
-            };
+    auto add_header = [&]() {
+        auto make_hdr = [&](const wxString &text) {
+            auto *lbl = new wxStaticText(panel, wxID_ANY, text);
+            lbl->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            lbl->SetForegroundColour(text_secondary(dark));
+            return lbl;
+        };
+        grid->Add(make_hdr(_L("Setting")), 0);
+        grid->Add(make_hdr(_L("Base Value")), 0);
+        grid->Add(make_hdr(_L("Override")), 0);
+    };
 
-            auto add_row = [&](const std::string &key, const std::string &value) {
-                auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(key));
-                lbl->SetForegroundColour(text_secondary(dark));
-                lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-                auto *val = new wxStaticText(panel, wxID_ANY, from_u8(value));
-                val->SetForegroundColour(text_primary(dark));
-                val->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
-                grid->Add(lbl, 0, wxALIGN_RIGHT);
-                grid->Add(val, 1, wxEXPAND);
-            };
+    static const std::set<std::string> skip_keys = {
+        "inherits", "from", "name", "print_settings_id", "filament_settings_id",
+        "printer_settings_id", "version", "print_extruder_id", "print_extruder_variant",
+        "filament_extruder_variant", "compatible_printers", "compatible_printers_condition",
+        "compatible_prints", "compatible_prints_condition"
+    };
 
-            int shown = 0;
-            for (auto &key : diff_keys) {
-                if (skip_keys.count(key)) continue;
-                std::string val = preset->config.opt_serialize(key);
-                if (val.length() > 80) val = val.substr(0, 77) + "...";
-                add_row(key, val);
-                shown++;
+    if (parent_preset && parent_preset != preset) {
+        auto diff_keys = preset->config.diff(parent_preset->config);
+
+        int shown = 0;
+        for (auto &key : diff_keys) {
+            if (skip_keys.count(key)) continue;
+
+            if (shown == 0) add_header();
+
+            // Get human-readable label
+            std::string label = key;
+            if (print_config_def.options.count(key)) {
+                auto &def = print_config_def.options.at(key);
+                label = def.full_label.empty() ? def.label : def.full_label;
             }
 
-            if (shown == 0) {
-                add_row("", "(no overrides — identical to base)");
-            }
-        } else {
-            auto *lbl = new wxStaticText(panel, wxID_ANY, _L("Root preset (no parent)"));
+            std::string base_val = parent_preset->config.opt_serialize(key);
+            std::string override_val = preset->config.opt_serialize(key);
+            if (base_val.length() > 60) base_val = base_val.substr(0, 57) + "...";
+            if (override_val.length() > 60) override_val = override_val.substr(0, 57) + "...";
+
+            auto *lbl = new wxStaticText(panel, wxID_ANY, from_u8(label));
+            lbl->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+            lbl->SetForegroundColour(text_primary(dark));
+
+            auto *base = new wxStaticText(panel, wxID_ANY, from_u8(base_val));
+            base->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+            base->SetForegroundColour(text_secondary(dark));
+
+            auto *over = new wxStaticText(panel, wxID_ANY, from_u8(override_val));
+            over->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+            over->SetForegroundColour(orange);
+
+            grid->Add(lbl, 0);
+            grid->Add(base, 1, wxEXPAND);
+            grid->Add(over, 1, wxEXPAND);
+            shown++;
+        }
+
+        if (shown == 0) {
+            auto *lbl = new wxStaticText(panel, wxID_ANY, _L("No overrides — identical to base profile"));
             lbl->SetForegroundColour(text_secondary(dark));
             grid->Add(lbl, 0);
             grid->AddSpacer(0);
+            grid->AddSpacer(0);
         }
+    } else {
+        auto *lbl = new wxStaticText(panel, wxID_ANY, _L("Root preset (no parent)"));
+        lbl->SetForegroundColour(text_secondary(dark));
+        grid->Add(lbl, 0);
+        grid->AddSpacer(0);
+        grid->AddSpacer(0);
     }
 
     auto *sizer = new wxBoxSizer(wxVERTICAL);
