@@ -3,6 +3,7 @@
 #include "I18N.hpp"
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
+#include "UnsavedChangesDialog.hpp"
 #include "libslic3r/Preset.hpp"
 
 #include <slic3r/GUI/Widgets/CheckBox.hpp>
@@ -100,7 +101,8 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
         std::string left, right;
         if (m_checked_presets.size() >= 1) left = m_checked_presets[0];
         if (m_checked_presets.size() >= 2) right = m_checked_presets[1];
-        wxGetApp().mainframe->diff_dialog.show(types[m_collection], left, right);
+        DiffPresetDialog dlg(this, types[m_collection], left, right);
+        dlg.ShowModal();
     });
 
     wxSizer *sizer_bottom = new wxBoxSizer(wxHORIZONTAL);
