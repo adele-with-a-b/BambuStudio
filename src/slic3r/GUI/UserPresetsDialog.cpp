@@ -220,8 +220,9 @@ void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
             m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#00AE42"));
             m_nozzle_buttons[i]->SetTextColorNormal(*wxWHITE);
         } else {
-            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#F0F0F0"));
-            m_nozzle_buttons[i]->SetTextColorNormal(wxColour("#262E30"));
+            bool dark = wxGetApp().dark_mode();
+            m_nozzle_buttons[i]->SetBackgroundColor(dark ? wxColour(78, 78, 78) : wxColour("#F0F0F0"));
+            m_nozzle_buttons[i]->SetTextColorNormal(dark ? wxColour(250, 250, 250) : wxColour("#262E30"));
         }
         m_nozzle_buttons[i]->Refresh();
     }
