@@ -322,8 +322,9 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     });
     m_card_checks[data.name] = check;
 
-    // Expand button
-    auto *expand_btn = new wxStaticText(card, wxID_ANY, "+");
+    // Expand button — shows +/- based on expanded state
+    bool is_expanded = (m_expanded_preset == data.name);
+    auto *expand_btn = new wxStaticText(card, wxID_ANY, is_expanded ? "-" : "+");
     expand_btn->SetFont(wxFont(14, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
     expand_btn->SetForegroundColour(wxColour("#00AE42"));
     expand_btn->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -363,9 +364,9 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     }
 
     hsizer->Add(check, 0, wxALIGN_CENTER | wxLEFT, FromDIP(10));
-    hsizer->Add(expand_btn, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(8));
-    hsizer->Add(name_label, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
-    hsizer->Add(badge, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
+    hsizer->Add(name_label, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(8));
+    hsizer->Add(badge, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+    hsizer->Add(expand_btn, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
     hsizer->AddStretchSpacer();
     hsizer->Add(info_sizer, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(10));
 
