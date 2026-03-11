@@ -443,8 +443,14 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 }
                 if (evt.IsChecked())
                     m_filter_nozzles.insert(nozzle);
-                else
+                else {
+                    // Don't allow unchecking the last one
+                    if (m_filter_nozzles.size() <= 1) {
+                        static_cast<wxCheckBox*>(evt.GetEventObject())->SetValue(true);
+                        return;
+                    }
                     m_filter_nozzles.erase(nozzle);
+                }
                 // If all are checked again, clear to mean "all"
                 if (m_filter_nozzles == all_nozzles)
                     m_filter_nozzles.clear();
@@ -463,7 +469,7 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 dynamic_base_counts[d.inherits]++;
         }
 
-        if (dynamic_base_counts.size() > 1) {
+        if (!dynamic_base_counts.empty()) {
             add_section(_L("Base Profile"));
             std::set<std::string> all_bases;
             for (auto &kv : dynamic_base_counts) all_bases.insert(kv.first);
@@ -480,8 +486,13 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                     }
                     if (evt.IsChecked())
                         m_filter_bases.insert(base);
-                    else
+                    else {
+                        if (m_filter_bases.size() <= 1) {
+                            static_cast<wxCheckBox*>(evt.GetEventObject())->SetValue(true);
+                            return;
+                        }
                         m_filter_bases.erase(base);
+                    }
                     if (m_filter_bases == all_bases)
                         m_filter_bases.clear();
                     on_filter_changed();
