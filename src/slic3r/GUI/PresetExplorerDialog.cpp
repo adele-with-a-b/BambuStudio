@@ -436,12 +436,13 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
         } else {
             int em = em_unit();
             auto *tree = new DiffViewCtrl(panel, wxSize(-1, std::min((int)filtered.size() * em * 3 + em * 6, em * 30)));
-            tree->AppendBmpTextColumn("", DiffModel::colIconText, 35, true);
+            tree->AppendBmpTextColumn(_L("Setting"), DiffModel::colIconText, 35, true);
             tree->AppendBmpTextColumn(_L("Base Value"), DiffModel::colOldValue, 15);
             tree->AppendBmpTextColumn(_L("Override"), DiffModel::colNewValue, 15);
 
-            tree->model->AddPreset(type, from_u8("Overrides from: " + parent_preset->name),
-                preset->printer_technology());
+            // Add settings directly without a preset root node
+            // We still need a hidden root for the tree structure, use AddPreset but we'll skip expanding it
+            tree->model->AddPreset(type, "", preset->printer_technology());
 
             Search::OptionsSearcher& searcher = wxGetApp().sidebar().get_searcher();
             searcher.sort_options_by_key();
@@ -466,7 +467,7 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
 
             searcher.sort_options_by_label();
 
-            // Expand all nodes
+            // Expand all nodes — skip the hidden root, expand categories and groups
             wxDataViewItemArray children;
             tree->model->GetChildren(wxDataViewItem(nullptr), children);
             for (auto &child : children) {

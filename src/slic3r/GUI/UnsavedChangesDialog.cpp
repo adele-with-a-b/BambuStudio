@@ -358,6 +358,17 @@ void DiffModel::GetValue(wxVariant& variant, const wxDataViewItem& item, unsigne
     assert(item.IsOk());
 
     ModelNode* node = static_cast<ModelNode*>(item.GetID());
+
+    // Container nodes (preset/category/group) should not show values in value columns
+    if (node->IsContainer() && (col == colOldValue || col == colNewValue)) {
+#ifdef __linux__
+        variant << wxDataViewIconText("", wxNullIcon);
+#else
+        variant << DataViewBitmapText("", wxNullBitmap);
+#endif
+        return;
+    }
+
     switch (col)
     {
     case colToggle:
