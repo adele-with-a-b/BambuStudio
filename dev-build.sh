@@ -52,6 +52,9 @@ cp -R "$APP_SRC" "$APP_DST"
 if [ -f "$PROJECT_DIR/resources/images/IconDev.icns" ]; then
     cp "$PROJECT_DIR/resources/images/IconDev.icns" "$APP_DST/Contents/Resources/Icon.icns"
 fi
+if [ -f "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" ]; then
+    cp "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" "$APP_DST/Contents/Resources/images/BambuStudio-mac_256px.ico"
+fi
 
 echo ""
 echo "✓ Installed: $APP_DST"
