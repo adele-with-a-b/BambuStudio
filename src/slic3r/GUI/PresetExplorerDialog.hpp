@@ -112,6 +112,8 @@ private:
     wxScrolledWindow *m_list_panel = nullptr;
     wxPanel *m_empty_panel = nullptr;
     wxPanel *m_filter_panel = nullptr;
+    wxPanel *m_col_header = nullptr;
+    wxBoxSizer *m_col_header_sizer = nullptr;
     wxBoxSizer *m_filter_sizer = nullptr;
     wxBoxSizer *m_list_sizer = nullptr;
     Button *m_btn_delete = nullptr;
