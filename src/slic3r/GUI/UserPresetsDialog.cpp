@@ -97,6 +97,7 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     m_button_compare->SetTextColorNormal(wxColor("#00AE42"));
     m_button_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
         Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
+        this->EndModal(wxID_OK);
         wxGetApp().mainframe->diff_dialog.show(types[m_collection]);
     });
 
@@ -187,6 +188,7 @@ void UserPresetsDialog::create_nozzle_filter_buttons(wxWindow *parent)
     m_nozzle_filter_sizer = new wxBoxSizer(wxHORIZONTAL);
     auto label = new Label(parent, _L("Nozzle:"));
     label->SetFont(Label::Body_13);
+    label->SetForegroundColour(wxGetApp().dark_mode() ? wxColour(250, 250, 250) : wxColour("#262E30"));
     m_nozzle_filter_sizer->Add(label, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
 
     // "All" button
