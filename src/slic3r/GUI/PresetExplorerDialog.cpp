@@ -333,8 +333,9 @@ wxPanel *PresetExplorerDialog::create_preset_card(wxWindow *parent, const Preset
     expand_btn->Bind(wxEVT_LEFT_UP, [this, name = data.name](auto &) { on_preset_expand(name); });
 
     // Compatibility icon
-    auto compat_bmp = create_scaled_bitmap(data.is_compatible ? "flag_green" : "flag_red", card, 12);
-    auto *compat_icon = new wxStaticBitmap(card, wxID_ANY, compat_bmp);
+    auto *compat_icon = new wxStaticText(card, wxID_ANY, data.is_compatible ? "\xe2\x9c\x93" : "\xe2\x9c\x97");  // ✓ or ✗
+    compat_icon->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+    compat_icon->SetForegroundColour(data.is_compatible ? wxColour("#00AE42") : wxColour("#D01B1B"));
     compat_icon->SetToolTip(data.is_compatible ? _L("Compatible with current printer and nozzle") : _L("Incompatible with current printer or nozzle selection"));
 
     // Name
@@ -454,7 +455,8 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
     if (parent_preset && parent_preset != preset) {
         auto diff_keys = preset->config.diff(parent_preset->config);
 
-        // Group overrides by category
+        // Group overrides by category in UI order
+        static const std::vector<std::string> category_order = {"Quality", "Strength", "Speed", "Support", "Advanced", "Others", "Other", "Flush options"};
         std::map<std::string, std::vector<std::string>> grouped;
         for (auto &key : diff_keys) {
             if (skip_keys.count(key)) continue;
@@ -469,7 +471,11 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
             lbl->SetForegroundColour(text_secondary(dark));
             main_sizer->Add(lbl, 0, wxALL, FromDIP(12));
         } else {
-            for (auto &[cat, keys] : grouped) {
+            // Iterate in UI order
+            for (auto &cat : category_order) {
+                auto it = grouped.find(cat);
+                if (it == grouped.end()) continue;
+                auto &keys = it->second;
                 auto *cat_sizer = new wxBoxSizer(wxHORIZONTAL);
                 auto icon_it = category_icons.find(cat);
                 if (icon_it != category_icons.end()) {
@@ -484,6 +490,7 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
                 main_sizer->Add(cat_sizer, 0, wxLEFT | wxTOP, FromDIP(12));
 
                 auto *grid = new wxFlexGridSizer(3, FromDIP(2), FromDIP(16));
+                grid->AddGrowableCol(0, 2);
                 grid->AddGrowableCol(1, 1);
                 grid->AddGrowableCol(2, 1);
 
@@ -551,36 +558,33 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
     compat_cb->SetToolTip(_L("Show only presets compatible with the currently selected printer and nozzle size. Incompatible presets are designed for a different nozzle or printer model."));
     compat_cb->Bind(wxEVT_CHECKBOX, [this](auto &evt) {
         m_filter_compatible_only = evt.IsChecked();
-        if (m_filter_compatible_only) {
-            // Clear nozzle/base filters — compatible-only overrides them
-            m_filter_nozzles.clear();
-            m_filter_bases.clear();
-            m_filter_materials.clear();
-        }
+        // Clear manual filters — the dynamic rebuild will show only what's relevant
+        m_filter_nozzles.clear();
+        m_filter_bases.clear();
+        m_filter_materials.clear();
         on_filter_changed();
     });
     sizer->Add(compat_cb, 0, wxALL, FromDIP(8));
 
     if (m_collection == 2) {  // Process
-        // Nozzle filter — checked = included, unchecked = excluded
-        // All checked by default (m_filter_nozzles empty = show all)
+        // Nozzle filter — recompute counts based on compatible filter
         add_section(_L("Nozzle"));
         std::set<std::string> all_nozzles;
-        for (auto &kv : m_nozzle_counts) all_nozzles.insert(kv.first);
+        std::map<std::string, int> dynamic_nozzle_counts;
+        for (auto &d : m_all_data[m_collection]) {
+            if (m_filter_compatible_only && !d.is_compatible) continue;
+            dynamic_nozzle_counts[d.nozzle]++;
+            all_nozzles.insert(d.nozzle);
+        }
 
-        for (auto &kv : m_nozzle_counts) {
+        for (auto &kv : dynamic_nozzle_counts) {
             wxString text = from_u8(kv.first + "mm") + wxString::Format(" (%d)", kv.second);
             auto *cb = new wxCheckBox(parent, wxID_ANY, text);
             bool is_active = m_filter_nozzles.empty() || m_filter_nozzles.count(kv.first) > 0;
             cb->SetValue(is_active);
             cb->SetForegroundColour(text_primary(dark));
-            // Disable if this is the only one selected — grayed out, can't uncheck
-            if (is_active && m_filter_nozzles.size() == 1) {
-                cb->Enable(false);
-                cb->SetForegroundColour(text_primary(dark));
-            }
-            // Disable all nozzle filters when compatible-only is active
-            if (m_filter_compatible_only) {
+            // Disable if this is the only one selected
+            if (is_active && m_filter_nozzles.size() == 1 && dynamic_nozzle_counts.size() == 1) {
                 cb->Enable(false);
                 cb->SetForegroundColour(text_primary(dark));
             }
@@ -600,9 +604,10 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
             sizer->Add(cb, 0, wxLEFT, FromDIP(12));
         }
 
-        // Base profile filter — dynamic based on nozzle selection
+        // Base profile filter — dynamic based on nozzle and compatible selection
         std::map<std::string, int> dynamic_base_counts;
         for (auto &d : m_all_data[m_collection]) {
+            if (m_filter_compatible_only && !d.is_compatible) continue;
             bool nozzle_ok = m_filter_nozzles.empty() || m_filter_nozzles.count(d.nozzle) > 0;
             if (nozzle_ok)
                 dynamic_base_counts[d.inherits]++;
@@ -622,8 +627,6 @@ void PresetExplorerDialog::build_filter_panel(wxWindow *parent, wxSizer *sizer)
                 if (is_active && m_filter_bases.size() == 1)
                     cb->Enable(false);
                 if (dynamic_base_counts.size() == 1)
-                    cb->Enable(false);
-                if (m_filter_compatible_only)
                     cb->Enable(false);
                 cb->SetForegroundColour(text_primary(dark));
                 cb->Bind(wxEVT_CHECKBOX, [this, base = kv.first, all_bases](auto &evt) {
