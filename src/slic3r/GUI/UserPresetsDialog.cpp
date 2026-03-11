@@ -2,6 +2,7 @@
 #include "UserPresetsDialog.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
+#include "MainFrame.hpp"
 #include "libslic3r/Preset.hpp"
 
 #include <slic3r/GUI/Widgets/CheckBox.hpp>
@@ -90,10 +91,20 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
         on_all_checked(checked, true);
     });
     m_button_delete->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &evt) { delete_checked(); });
+
+    m_button_compare = new Button(this, _L("Compare"));
+    m_button_compare->SetBorderColorNormal(wxColor("#00AE42"));
+    m_button_compare->SetTextColorNormal(wxColor("#00AE42"));
+    m_button_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
+        Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
+        wxGetApp().mainframe->diff_dialog.show(types[m_collection]);
+    });
+
     wxSizer *sizer_bottom = new wxBoxSizer(wxHORIZONTAL);
     sizer_bottom->Add(m_check_all, 0, wxALIGN_CENTER | wxLEFT, FromDIP(20));
     sizer_bottom->Add(label, 0, wxALIGN_CENTER | wxLEFT, FromDIP(8));
     sizer_bottom->Add(m_label_check_count, 1, wxALIGN_CENTER | wxLEFT, FromDIP(8));
+    sizer_bottom->Add(m_button_compare, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
     sizer_bottom->Add(m_button_delete, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(20));
 
     wxSizer *sizer = new wxBoxSizer(wxVERTICAL);

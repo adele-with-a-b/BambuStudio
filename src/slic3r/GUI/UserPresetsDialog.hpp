@@ -82,6 +82,7 @@ private:
     CheckBox * m_check_all;
     Label * m_label_check_count;
     Button * m_button_delete;
+    Button * m_button_compare;
 
     // Phase 1: nozzle filter
     wxBoxSizer * m_nozzle_filter_sizer = nullptr;
