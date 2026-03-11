@@ -418,6 +418,8 @@ public:
 //------------------------------------------
 //          DiffPresetDialog
 //------------------------------------------
+wxString get_string_value(std::string opt_key, const DynamicPrintConfig& config);
+wxString get_full_label(std::string opt_key, const DynamicPrintConfig& config);
 class DiffPresetDialog : public DPIDialog
 {
     DiffViewCtrl*           m_tree              { nullptr };

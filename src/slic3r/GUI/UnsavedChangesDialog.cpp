@@ -1247,7 +1247,7 @@ static size_t get_id_from_opt_key(std::string opt_key)
 }
 #endif
 
-static wxString get_full_label(std::string opt_key, const DynamicPrintConfig& config)
+wxString get_full_label(std::string opt_key, const DynamicPrintConfig& config)
 {
     opt_key = get_pure_opt_key(opt_key);
     auto option = config.option(opt_key);
@@ -1259,7 +1259,7 @@ static wxString get_full_label(std::string opt_key, const DynamicPrintConfig& co
     return opt->full_label.empty() ? opt->label : opt->full_label;
 }
 
-static wxString get_string_value(std::string opt_key, const DynamicPrintConfig& config)
+wxString get_string_value(std::string opt_key, const DynamicPrintConfig& config)
 {
     int orig_opt_idx = -1;
     int opt_idx = -1;
