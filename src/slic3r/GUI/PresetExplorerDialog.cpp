@@ -207,10 +207,30 @@ PresetExplorerDialog::PresetExplorerDialog(wxWindow *parent)
     m_list_sizer = new wxBoxSizer(wxVERTICAL);
     m_list_panel->SetSizer(m_list_sizer);
 
-    // Content area: filter | list
+    // Empty state panel
+    m_empty_panel = new wxPanel(this);
+    m_empty_panel->SetForegroundColour(wxColor("#A0A0A0"));
+    {
+        wxSizer *esizer = new wxBoxSizer(wxVERTICAL);
+        wxStaticBitmap *bitmap = new wxStaticBitmap(m_empty_panel, wxID_ANY,
+            create_scaled_bitmap(dark ? "preset_empty_dark" : "preset_empty", this, 150));
+        esizer->Add(bitmap, 0, wxALIGN_CENTER | wxTOP, FromDIP(70));
+        auto *elabel = new Label(m_empty_panel, _L("No content"));
+        elabel->SetBackgroundColour(GetBackgroundColour());
+        elabel->SetForegroundColour(m_empty_panel->GetForegroundColour());
+        esizer->Add(elabel, 0, wxALIGN_CENTER);
+        m_empty_panel->SetSizer(esizer);
+        m_empty_panel->Hide();
+    }
+
+    // Content area: filter | list/empty
+    wxBoxSizer *right_sizer = new wxBoxSizer(wxVERTICAL);
+    right_sizer->Add(m_list_panel, 1, wxEXPAND);
+    right_sizer->Add(m_empty_panel, 1, wxEXPAND);
+
     wxBoxSizer *content = new wxBoxSizer(wxHORIZONTAL);
     content->Add(m_filter_panel, 0, wxEXPAND | wxRIGHT, FromDIP(10));
-    content->Add(m_list_panel, 1, wxEXPAND);
+    content->Add(right_sizer, 1, wxEXPAND);
 
     // Bottom bar: status + actions
     m_status_text = new wxStaticText(this, wxID_ANY, "");
@@ -562,8 +582,11 @@ void PresetExplorerDialog::rebuild_visible_list()
     }
 
     m_status_text->SetLabel(wxString::Format(_L("%zu presets"), m_visible_indices.size()));
+    m_list_panel->Show(!m_visible_indices.empty());
+    m_empty_panel->Show(m_visible_indices.empty());
     m_list_panel->Layout();
     m_list_panel->FitInside();
+    m_list_panel->GetParent()->Layout();
 }
 
 void PresetExplorerDialog::apply_filters()
@@ -585,20 +608,14 @@ void PresetExplorerDialog::apply_filters()
             if (!m_filter_materials.empty() && m_filter_materials.count(d.material_type) == 0) continue;
         }
 
-        // Search filter
+        // Search filter — name only
         if (!m_search_text.empty()) {
             std::string lower_search = m_search_text;
             std::transform(lower_search.begin(), lower_search.end(), lower_search.begin(), ::tolower);
             std::string lower_name = d.name;
             std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
-            std::string lower_inherits = d.inherits;
-            std::transform(lower_inherits.begin(), lower_inherits.end(), lower_inherits.begin(), ::tolower);
-            std::string lower_script = d.postprocess_script;
-            std::transform(lower_script.begin(), lower_script.end(), lower_script.begin(), ::tolower);
 
-            if (lower_name.find(lower_search) == std::string::npos &&
-                lower_inherits.find(lower_search) == std::string::npos &&
-                lower_script.find(lower_search) == std::string::npos)
+            if (lower_name.find(lower_search) == std::string::npos)
                 continue;
         }
 

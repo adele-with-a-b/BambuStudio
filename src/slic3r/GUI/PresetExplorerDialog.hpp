@@ -109,6 +109,7 @@ private:
     TextInput *m_search = nullptr;
     wxChoice *m_sort_choice = nullptr;
     wxScrolledWindow *m_list_panel = nullptr;
+    wxPanel *m_empty_panel = nullptr;
     wxPanel *m_filter_panel = nullptr;
     wxBoxSizer *m_filter_sizer = nullptr;
     wxBoxSizer *m_list_sizer = nullptr;
