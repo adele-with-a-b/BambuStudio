@@ -364,9 +364,12 @@ void FilamentGroupPopup::Dismiss() {
 
 void FilamentGroupPopup::OnLeaveWindow(wxMouseEvent &)
 {
-    wxPoint pos = this->ScreenToClient(wxGetMousePosition());
-    if (this->GetClientRect().Contains(pos)) return;
-    StartTimer();
+    wxPoint screen_pos = wxGetMousePosition();
+    wxPoint popup_pos = this->ScreenToClient(screen_pos);
+    // If mouse is still inside the popup (child control boundary), ignore
+    if (this->GetClientRect().Contains(popup_pos)) return;
+    // Dismiss immediately — no timer delay
+    Dismiss();
 }
 
 void FilamentGroupPopup::OnEnterWindow(wxMouseEvent &) { ResetTimer(); }

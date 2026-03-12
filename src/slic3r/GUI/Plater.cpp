@@ -728,8 +728,10 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
 
         // double
         auto hsizer_extruder = new wxBoxSizer(wxHORIZONTAL);
-        left_extruder->SetMinSize({FromDIP(120), -1});
-        right_extruder->SetMinSize({FromDIP(120), -1});
+        // Force equal sizing: set identical min widths so neither collapses before the other
+        int equal_min = FromDIP(140);
+        left_extruder->sizer->SetMinSize(equal_min, -1);
+        right_extruder->sizer->SetMinSize(equal_min, -1);
         hsizer_extruder->Add(left_extruder->sizer, 1, wxEXPAND, 0);
         hsizer_extruder->AddSpacer(FromDIP(4));
         hsizer_extruder->Add(right_extruder->sizer, 1, wxEXPAND, 0);
