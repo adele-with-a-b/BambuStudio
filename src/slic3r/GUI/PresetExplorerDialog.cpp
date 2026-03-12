@@ -440,42 +440,62 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
             tree->AppendBmpTextColumn(_L("Base Value"), DiffModel::colOldValue, 15);
             tree->AppendBmpTextColumn(_L("Override"), DiffModel::colNewValue, 15);
 
-            // Add settings directly without a preset root node
-            // We still need a hidden root for the tree structure, use AddPreset but we'll skip expanding it
-            tree->model->AddPreset(type, "", preset->printer_technology());
+            // Need a root preset node for the tree model, but we won't show it expanded
+            tree->model->AddPreset(type, wxString(""), preset->printer_technology());
 
+            // Add settings directly — no preset root node
             Search::OptionsSearcher& searcher = wxGetApp().sidebar().get_searcher();
             searcher.sort_options_by_key();
 
-            const std::map<wxString, std::string>& category_icon_map = wxGetApp().get_tab(type)->get_category_icon_map();
+            // Direct category → icon mapping (doesn't depend on tab being built)
+            static const std::map<std::string, std::string> cat_icons = {
+                {"Quality", "param_layer_height"}, {"Strength", "param_wall"},
+                {"Speed", "param_speed"}, {"Support", "param_support"},
+                {"Advanced", "param_advanced"}, {"Others", "param_advanced"},
+                {"Other", "param_advanced"}, {"Flush options", "param_flush"},
+                {"Extruders", "param_advanced"}, {"Machine limits", "param_speed"},
+            };
 
             for (const std::string& opt_key : filtered) {
                 wxString left_val = get_string_value(opt_key, parent_preset->config);
                 wxString right_val = get_string_value(opt_key, preset->config);
 
                 Search::Option option = searcher.get_option(opt_key, get_full_label(opt_key, preset->config), type);
-                if (option.opt_key() != opt_key || (option.category.empty() && option.group.empty())) {
-                    tree->Append(opt_key, type, "Other", "Other", from_u8(opt_key), left_val, right_val, "param_advanced");
-                } else {
-                    std::string icon = "param_advanced";
-                    auto it = category_icon_map.find(option.category);
-                    if (it != category_icon_map.end()) icon = it->second;
-                    tree->Append(opt_key, type, option.category_local, option.group_local, option.label_local,
-                        left_val, right_val, icon);
+
+                std::string icon = "param_advanced";
+                std::string cat_name = opt_key;
+                std::string grp_name = "";
+                wxString label = from_u8(opt_key);
+
+                if (option.opt_key() == opt_key && !(option.category.empty() && option.group.empty())) {
+                    cat_name = into_u8(option.category_local);
+                    grp_name = into_u8(option.group_local);
+                    label = option.label_local;
+                    std::string cat_key = into_u8(option.category);
+                    auto it = cat_icons.find(cat_key);
+                    if (it != cat_icons.end()) icon = it->second;
                 }
+
+                tree->Append(opt_key, type, from_u8(cat_name), from_u8(grp_name), label,
+                    left_val, right_val, icon);
             }
 
             searcher.sort_options_by_label();
 
-            // Expand all nodes — skip the hidden root, expand categories and groups
-            wxDataViewItemArray children;
-            tree->model->GetChildren(wxDataViewItem(nullptr), children);
-            for (auto &child : children) {
-                tree->Expand(child);
-                wxDataViewItemArray grandchildren;
-                tree->model->GetChildren(child, grandchildren);
-                for (auto &gc : grandchildren)
-                    tree->Expand(gc);
+            // Expand all nodes — expand root (hidden label), then categories and groups
+            wxDataViewItemArray roots;
+            tree->model->GetChildren(wxDataViewItem(nullptr), roots);
+            for (auto &root : roots) {
+                tree->Expand(root);  // expand the preset root to show categories
+                wxDataViewItemArray categories;
+                tree->model->GetChildren(root, categories);
+                for (auto &cat : categories) {
+                    tree->Expand(cat);  // expand categories to show groups
+                    wxDataViewItemArray groups;
+                    tree->model->GetChildren(cat, groups);
+                    for (auto &grp : groups)
+                        tree->Expand(grp);  // expand groups to show settings
+                }
             }
             main_sizer->Add(tree, 1, wxEXPAND | wxALL, FromDIP(4));
         }
