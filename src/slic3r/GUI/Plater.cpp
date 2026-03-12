@@ -3848,11 +3848,21 @@ void Sidebar::pop_sync_nozzle_and_ams_dialog() {
         wxPoint                           big_btn_pt;
         wxSize                            big_btn_size;
         wxGetApp().plater()->sidebar().get_big_btn_sync_pos_size(big_btn_pt, big_btn_size);
-        temp_na_info.dialog_pos = big_btn_pt + wxPoint(big_btn_size.x, big_btn_size.y) + wxPoint(FromDIP(big_btn_size.x / 10.f - 5), FromDIP(big_btn_size.y / 10.f));
 
-        int same_dialog_pos_x     = get_sidebar_pos_right_x() + FromDIP(5);
-        temp_na_info.dialog_pos.x = same_dialog_pos_x;
-        temp_na_info.dialog_pos.y += FromDIP(2);
+        // Center on main window
+        wxWindow *mainframe = wxGetApp().mainframe;
+        if (mainframe) {
+            wxPoint mf_pos = mainframe->GetScreenPosition();
+            wxSize mf_size = mainframe->GetSize();
+            // Estimate dialog size (~310dp wide based on constructor)
+            int dlg_w = FromDIP(310);
+            int dlg_h = FromDIP(400);
+            temp_na_info.dialog_pos = wxPoint(
+                mf_pos.x + (mf_size.x - dlg_w) / 2,
+                mf_pos.y + (mf_size.y - dlg_h) / 2);
+        } else {
+            temp_na_info.dialog_pos = big_btn_pt + wxPoint(big_btn_size.x, big_btn_size.y);
+        }
 
         wxPoint small_btn_pt;
         wxSize  small_btn_size;
@@ -3864,17 +3874,6 @@ void Sidebar::pop_sync_nozzle_and_ams_dialog() {
             m_sna_dialog = nullptr;
         }
         m_sna_dialog = new SyncNozzleAndAmsDialog(temp_na_info);
-        // Center on main window instead of sidebar-relative position
-        wxWindow *mainframe = wxGetApp().mainframe;
-        if (mainframe) {
-            wxPoint mf_pos = mainframe->GetScreenPosition();
-            wxSize mf_size = mainframe->GetSize();
-            wxSize dlg_size = m_sna_dialog->GetSize();
-            temp_na_info.dialog_pos = wxPoint(
-                mf_pos.x + (mf_size.x - dlg_size.x) / 2,
-                mf_pos.y + (mf_size.y - dlg_size.y) / 2);
-            m_sna_dialog->SetPosition(temp_na_info.dialog_pos);
-        }
         m_sna_dialog->on_show();
     });
 }
