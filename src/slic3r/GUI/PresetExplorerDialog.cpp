@@ -408,6 +408,8 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
         return panel;
     }
 
+    Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
+    Preset::Type type = types[m_collection];
     const Preset *parent_preset = collection->get_preset_base(*preset);
 
     static const std::set<std::string> skip_keys = {
@@ -417,14 +419,22 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
         "compatible_prints", "compatible_prints_condition"
     };
 
-    if (parent_preset && parent_preset != preset) {
-        Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
-        Preset::Type type = types[m_collection];
+    static const std::map<std::string, std::string> cat_icons = {
+        {"Quality", "param_layer_height"}, {"Strength", "param_wall"},
+        {"Speed", "param_speed"}, {"Support", "param_support"},
+        {"Advanced", "param_advanced"}, {"Others", "param_advanced"},
+        {"Other", "param_advanced"}, {"Flush options", "param_flush"},
+    };
 
+    wxColour orange("#F1754E");
+    wxColour header_bg = dark ? wxColour(55, 55, 55) : wxColour(228, 228, 228);
+    wxFont bold_font = wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+    wxFont normal_font = wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+
+    if (parent_preset && parent_preset != preset) {
         const bool deep_compare = (type == Preset::TYPE_PRINTER);
         auto dirty_options = collection->dirty_options(preset, parent_preset, deep_compare);
 
-        // Filter out skip keys
         std::vector<std::string> filtered;
         for (auto &key : dirty_options)
             if (!skip_keys.count(key)) filtered.push_back(key);
@@ -434,70 +444,79 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
             lbl->SetForegroundColour(text_secondary(dark));
             main_sizer->Add(lbl, 0, wxALL, FromDIP(12));
         } else {
-            int em = em_unit();
-            auto *tree = new DiffViewCtrl(panel, wxSize(-1, std::min((int)filtered.size() * em * 3 + em * 6, em * 30)));
-            tree->AppendBmpTextColumn(_L("Setting"), DiffModel::colIconText, 35, true);
-            tree->AppendBmpTextColumn(_L("Base Value"), DiffModel::colOldValue, 15);
-            tree->AppendBmpTextColumn(_L("Override"), DiffModel::colNewValue, 15);
-
-            // Need a root preset node for the tree model, but we won't show it expanded
-            tree->model->AddPreset(type, wxString(""), preset->printer_technology());
-
-            // Add settings directly — no preset root node
             Search::OptionsSearcher& searcher = wxGetApp().sidebar().get_searcher();
             searcher.sort_options_by_key();
 
-            // Direct category → icon mapping (doesn't depend on tab being built)
-            static const std::map<std::string, std::string> cat_icons = {
-                {"Quality", "param_layer_height"}, {"Strength", "param_wall"},
-                {"Speed", "param_speed"}, {"Support", "param_support"},
-                {"Advanced", "param_advanced"}, {"Others", "param_advanced"},
-                {"Other", "param_advanced"}, {"Flush options", "param_flush"},
-                {"Extruders", "param_advanced"}, {"Machine limits", "param_speed"},
-            };
+            // Group by category in order
+            static const std::vector<std::string> cat_order = {"Quality", "Strength", "Speed", "Support", "Advanced", "Others", "Other", "Flush options"};
+            std::map<std::string, std::vector<std::tuple<std::string, wxString, wxString, wxString>>> grouped;
 
             for (const std::string& opt_key : filtered) {
                 wxString left_val = get_string_value(opt_key, parent_preset->config);
                 wxString right_val = get_string_value(opt_key, preset->config);
 
                 Search::Option option = searcher.get_option(opt_key, get_full_label(opt_key, preset->config), type);
-
-                std::string icon = "param_advanced";
-                std::string cat_name = opt_key;
-                std::string grp_name = "";
+                std::string cat = "Other";
                 wxString label = from_u8(opt_key);
-
                 if (option.opt_key() == opt_key && !(option.category.empty() && option.group.empty())) {
-                    cat_name = into_u8(option.category_local);
-                    grp_name = into_u8(option.group_local);
+                    cat = into_u8(option.category);
                     label = option.label_local;
-                    std::string cat_key = into_u8(option.category);
-                    auto it = cat_icons.find(cat_key);
-                    if (it != cat_icons.end()) icon = it->second;
                 }
-
-                tree->Append(opt_key, type, from_u8(cat_name), from_u8(grp_name), label,
-                    left_val, right_val, icon);
+                grouped[cat].emplace_back(opt_key, label, left_val, right_val);
             }
 
             searcher.sort_options_by_label();
 
-            // Expand all nodes — expand root (hidden label), then categories and groups
-            wxDataViewItemArray roots;
-            tree->model->GetChildren(wxDataViewItem(nullptr), roots);
-            for (auto &root : roots) {
-                tree->Expand(root);  // expand the preset root to show categories
-                wxDataViewItemArray categories;
-                tree->model->GetChildren(root, categories);
-                for (auto &cat : categories) {
-                    tree->Expand(cat);  // expand categories to show groups
-                    wxDataViewItemArray groups;
-                    tree->model->GetChildren(cat, groups);
-                    for (auto &grp : groups)
-                        tree->Expand(grp);  // expand groups to show settings
+            // Build flat grid with category headers
+            auto *grid = new wxFlexGridSizer(3, FromDIP(1), FromDIP(8));
+            grid->AddGrowableCol(0, 3);
+            grid->AddGrowableCol(1, 2);
+            grid->AddGrowableCol(2, 2);
+
+            for (auto &cat_name : cat_order) {
+                auto it = grouped.find(cat_name);
+                if (it == grouped.end()) continue;
+
+                // Category header row with icon
+                auto *cat_panel = new wxPanel(panel);
+                cat_panel->SetBackgroundColour(header_bg);
+                auto *cat_hsizer = new wxBoxSizer(wxHORIZONTAL);
+                auto icon_it = cat_icons.find(cat_name);
+                if (icon_it != cat_icons.end()) {
+                    auto bmp = create_scaled_bitmap(icon_it->second, cat_panel, 16);
+                    cat_hsizer->Add(new wxStaticBitmap(cat_panel, wxID_ANY, bmp), 0, wxALIGN_CENTER | wxRIGHT, FromDIP(6));
+                }
+                auto *cat_lbl = new wxStaticText(cat_panel, wxID_ANY, from_u8(cat_name));
+                cat_lbl->SetFont(bold_font);
+                cat_lbl->SetForegroundColour(text_primary(dark));
+                cat_hsizer->Add(cat_lbl, 0, wxALIGN_CENTER);
+                cat_panel->SetSizer(cat_hsizer);
+
+                grid->Add(cat_panel, 1, wxEXPAND | wxTOP, FromDIP(4));
+                grid->AddSpacer(0);
+                grid->AddSpacer(0);
+
+                // Setting rows
+                for (auto &[key, label, base_val, override_val] : it->second) {
+                    auto *lbl = new wxStaticText(panel, wxID_ANY, label);
+                    lbl->SetFont(normal_font);
+                    lbl->SetForegroundColour(text_primary(dark));
+
+                    auto *base = new wxStaticText(panel, wxID_ANY, base_val);
+                    base->SetFont(normal_font);
+                    base->SetForegroundColour(text_secondary(dark));
+
+                    auto *over = new wxStaticText(panel, wxID_ANY, override_val);
+                    over->SetFont(bold_font);
+                    over->SetForegroundColour(orange);
+
+                    grid->Add(lbl, 1, wxEXPAND | wxLEFT, FromDIP(28));
+                    grid->Add(base, 1, wxEXPAND);
+                    grid->Add(over, 1, wxEXPAND);
                 }
             }
-            main_sizer->Add(tree, 1, wxEXPAND | wxALL, FromDIP(4));
+
+            main_sizer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(8));
         }
     } else {
         auto *lbl = new wxStaticText(panel, wxID_ANY, _L("Root preset (no parent)"));
@@ -508,6 +527,7 @@ wxPanel *PresetExplorerDialog::create_expanded_details(wxWindow *parent, const P
     panel->SetSizer(main_sizer);
     return panel;
 }
+
 
 
 // ============================================================
