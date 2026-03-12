@@ -335,7 +335,7 @@ void FilamentGroupPopup::OnPaint(wxPaintEvent&)
     DrawRoundedCorner(16);
 }
 
-void FilamentGroupPopup::StartTimer() { m_timer->StartOnce(300); }
+void FilamentGroupPopup::StartTimer() { m_timer->StartOnce(100); }
 
 void FilamentGroupPopup::ResetTimer()
 {
