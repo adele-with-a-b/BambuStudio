@@ -3577,6 +3577,7 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
             dynamic_filament_list.update();
         }
         m_sync_dlg->set_check_dirty_fialment(false);
+        m_sync_dlg->CenterOnParent();
         dlg_res = m_sync_dlg->ShowModal();
     } else {
         dlg_res =(int) wxID_YES;
@@ -3863,6 +3864,17 @@ void Sidebar::pop_sync_nozzle_and_ams_dialog() {
             m_sna_dialog = nullptr;
         }
         m_sna_dialog = new SyncNozzleAndAmsDialog(temp_na_info);
+        // Center on main window instead of sidebar-relative position
+        wxWindow *mainframe = wxGetApp().mainframe;
+        if (mainframe) {
+            wxPoint mf_pos = mainframe->GetScreenPosition();
+            wxSize mf_size = mainframe->GetSize();
+            wxSize dlg_size = m_sna_dialog->GetSize();
+            temp_na_info.dialog_pos = wxPoint(
+                mf_pos.x + (mf_size.x - dlg_size.x) / 2,
+                mf_pos.y + (mf_size.y - dlg_size.y) / 2);
+            m_sna_dialog->SetPosition(temp_na_info.dialog_pos);
+        }
         m_sna_dialog->on_show();
     });
 }
