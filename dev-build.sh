@@ -69,6 +69,9 @@ fi
 if [ -f "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" ]; then
     cp "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" "$APP_DST/Contents/Resources/images/BambuStudio-mac_256px.ico"
 fi
+if [ -f "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" ]; then
+    cp "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" "$APP_DST/Contents/Resources/images/BambuStudio-mac_256px.ico"
+fi
 
 echo ""
 echo "✓ Installed: $APP_DST"
