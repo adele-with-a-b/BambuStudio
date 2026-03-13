@@ -6,6 +6,16 @@
 
 set -e
 
+# Backup BambuStudioInternal config before build (LAN printer config is lost on reset)
+INTERNAL_DIR="$HOME/Library/Application Support/BambuStudioInternal"
+BACKUP_DIR="$HOME/3d-engineer-tools/bambu-config-backup"
+if [ -f "$INTERNAL_DIR/BambuNetworkEngine.conf" ]; then
+    mkdir -p "$BACKUP_DIR"
+    cp "$INTERNAL_DIR/BambuNetworkEngine.conf" "$BACKUP_DIR/BambuNetworkEngine.conf.bak"
+    cp "$INTERNAL_DIR/BambuStudio.conf" "$BACKUP_DIR/BambuStudio.conf.bak"
+    echo "Backed up BambuStudioInternal config to $BACKUP_DIR"
+fi
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DEPS="$PROJECT_DIR/../BambuStudio_dep/usr/local"

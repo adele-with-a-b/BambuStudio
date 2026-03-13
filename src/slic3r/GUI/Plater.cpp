@@ -728,10 +728,6 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
 
         // double
         auto hsizer_extruder = new wxBoxSizer(wxHORIZONTAL);
-        // Force equal sizing: set identical min widths so neither collapses before the other
-        int equal_min = FromDIP(140);
-        left_extruder->sizer->SetMinSize(equal_min, -1);
-        right_extruder->sizer->SetMinSize(equal_min, -1);
         hsizer_extruder->Add(left_extruder->sizer, 1, wxEXPAND, 0);
         hsizer_extruder->AddSpacer(FromDIP(4));
         hsizer_extruder->Add(right_extruder->sizer, 1, wxEXPAND, 0);
@@ -3577,7 +3573,6 @@ void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
             dynamic_filament_list.update();
         }
         m_sync_dlg->set_check_dirty_fialment(false);
-        m_sync_dlg->CenterOnParent();
         dlg_res = m_sync_dlg->ShowModal();
     } else {
         dlg_res =(int) wxID_YES;
@@ -3848,21 +3843,11 @@ void Sidebar::pop_sync_nozzle_and_ams_dialog() {
         wxPoint                           big_btn_pt;
         wxSize                            big_btn_size;
         wxGetApp().plater()->sidebar().get_big_btn_sync_pos_size(big_btn_pt, big_btn_size);
+        temp_na_info.dialog_pos = big_btn_pt + wxPoint(big_btn_size.x, big_btn_size.y) + wxPoint(FromDIP(big_btn_size.x / 10.f - 5), FromDIP(big_btn_size.y / 10.f));
 
-        // Center on main window
-        wxWindow *mainframe = wxGetApp().mainframe;
-        if (mainframe) {
-            wxPoint mf_pos = mainframe->GetScreenPosition();
-            wxSize mf_size = mainframe->GetSize();
-            // Estimate dialog size (~310dp wide based on constructor)
-            int dlg_w = FromDIP(310);
-            int dlg_h = FromDIP(400);
-            temp_na_info.dialog_pos = wxPoint(
-                mf_pos.x + (mf_size.x - dlg_w) / 2,
-                mf_pos.y + (mf_size.y - dlg_h) / 2);
-        } else {
-            temp_na_info.dialog_pos = big_btn_pt + wxPoint(big_btn_size.x, big_btn_size.y);
-        }
+        int same_dialog_pos_x     = get_sidebar_pos_right_x() + FromDIP(5);
+        temp_na_info.dialog_pos.x = same_dialog_pos_x;
+        temp_na_info.dialog_pos.y += FromDIP(2);
 
         wxPoint small_btn_pt;
         wxSize  small_btn_size;
