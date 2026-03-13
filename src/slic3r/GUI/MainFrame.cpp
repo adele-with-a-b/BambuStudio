@@ -1780,7 +1780,8 @@ wxBoxSizer* MainFrame::create_side_tools()
     // this pannel is used to trigger hover when button is disabled
     slice_panel->Bind(wxEVT_ENTER_WINDOW, [this,try_hover_pop_up](auto& event) {
         if(!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
-            try_hover_pop_up();
+            if (m_slice_enable)
+                try_hover_pop_up();
         });
 
     slice_panel->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
@@ -1789,7 +1790,8 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_slice_btn->Bind(wxEVT_ENTER_WINDOW, [this, try_hover_pop_up](auto& event) {
         if (!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
-            try_hover_pop_up();
+            if (m_slice_enable)
+                try_hover_pop_up();
         });
 
     m_slice_btn->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
