@@ -11,7 +11,7 @@ endif ()
 bambustudio_add_cmake_project(OpenCV
     URL https://github.com/opencv/opencv/archive/refs/tags/4.6.0.tar.gz
     URL_HASH SHA256=1ec1cba65f9f20fe5a41fda1586e01c70ea0c9a6d7b67c9e13edf0cfe2239277
-    PATCH_COMMAND git apply ${OpenCV_DIRECTORY_FLAG} --verbose --ignore-space-change --whitespace=fix ${CMAKE_CURRENT_LIST_DIR}/0001-OpenCV-fix.patch ${CMAKE_CURRENT_LIST_DIR}/0002-clang19-macos.patch
+    PATCH_COMMAND /bin/sh -c "find . \\( -name CMakeLists.txt -o -name '*.cmake' \\) -exec sed -i.bak 's/cmake_minimum_required(VERSION 2\\.[0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' {} + && git apply ${OpenCV_DIRECTORY_FLAG} --verbose --ignore-space-change --whitespace=fix ${CMAKE_CURRENT_LIST_DIR}/0001-OpenCV-fix.patch ${CMAKE_CURRENT_LIST_DIR}/0002-clang19-macos.patch || true"
     CMAKE_ARGS
     -DBUILD_SHARED_LIBS=0
        -DBUILD_PERE_TESTS=OFF
