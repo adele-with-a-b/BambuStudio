@@ -62,6 +62,9 @@ if [ "$CMD" = "clean" ] || [ "$CMD" = "nuke" ] || [ "$CMD" = "configure" ]; then
     [ "$CMD" = "configure" ] && { echo "✅ Configure complete."; exit 0; }
 fi
 
+# Clear log before build so progress bar doesn't read configure output
+> "$PROJECT_DIR/build.log"
+
 # Build
 echo "Building..."
 cd "$BUILD_DIR"
