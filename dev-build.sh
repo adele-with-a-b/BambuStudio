@@ -21,6 +21,9 @@ fi
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DEPS="$PROJECT_DIR/../BambuStudio_dep/usr/local"
+if [ ! -d "$DEPS" ] && [ -d "$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local" ]; then
+    DEPS="$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local"
+fi
 APP_NAME="BambuStudio Dev"
 APP_DST="/Applications/$APP_NAME.app"
 
