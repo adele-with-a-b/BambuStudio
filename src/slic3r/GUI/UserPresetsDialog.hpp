@@ -61,6 +61,15 @@ private:
 
     bool is_filament_list() const;
 
+    // Phase 1: nozzle filter + grouping for process presets
+    std::string get_nozzle_for_preset(const std::string &preset_name) const;
+    void on_nozzle_filter_changed(const std::string &nozzle);
+    void create_nozzle_filter_buttons(wxWindow *parent);
+
+    // Phase 2: compatible-only toggle
+    void on_compatible_toggle(bool compatible_only);
+    void apply_filters();
+
 private:
     TabCtrl * m_tab_ctrl;
     SwitchButton * m_switch_button;
@@ -73,6 +82,18 @@ private:
     CheckBox * m_check_all;
     Label * m_label_check_count;
     Button * m_button_delete;
+    Button * m_button_compare;
+
+    // Phase 1: nozzle filter
+    wxBoxSizer * m_nozzle_filter_sizer = nullptr;
+    std::string m_nozzle_filter;  // "" = all, "0.2" / "0.4" / "0.6" / "0.8"
+    std::vector<Button *> m_nozzle_buttons;
+    std::map<std::string, std::string> m_preset_inherits;  // preset name → inherits value
+    std::map<std::string, std::string> m_preset_nozzle;    // preset name → nozzle size string
+
+    // Phase 2: compatible-only toggle
+    SwitchButton * m_compatible_toggle = nullptr;
+    std::map<std::string, bool> m_preset_compatible;  // preset name → is_compatible
 
 private:
     std::vector<std::vector<std::string>> m_presets;

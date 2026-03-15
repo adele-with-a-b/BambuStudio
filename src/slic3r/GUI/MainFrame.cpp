@@ -27,6 +27,7 @@
 #include "3DScene.hpp"
 #include "ParamsDialog.hpp"
 #include "UserPresetsDialog.hpp"
+#include "PresetExplorerDialog.hpp"
 #include "PrintHostDialogs.hpp"
 #include "wxExtensions.hpp"
 #include "GUI_ObjectList.hpp"
@@ -1779,7 +1780,8 @@ wxBoxSizer* MainFrame::create_side_tools()
     // this pannel is used to trigger hover when button is disabled
     slice_panel->Bind(wxEVT_ENTER_WINDOW, [this,try_hover_pop_up](auto& event) {
         if(!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
-            try_hover_pop_up();
+            if (m_slice_enable)
+                try_hover_pop_up();
         });
 
     slice_panel->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
@@ -1788,7 +1790,8 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     m_slice_btn->Bind(wxEVT_ENTER_WINDOW, [this, try_hover_pop_up](auto& event) {
         if (!m_slice_option_pop_up || !m_slice_option_pop_up->IsShown())
-            try_hover_pop_up();
+            if (m_slice_enable)
+                try_hover_pop_up();
         });
 
     m_slice_btn->Bind(wxEVT_LEAVE_WINDOW, [this](auto& event) {
@@ -2658,11 +2661,6 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(fileMenu, wxID_ANY, _L("Save Project") + "\t" + ctrl + "S", _L("Save current project to file"),
             [this](wxCommandEvent&) { if (m_plater) m_plater->save_project(); }, "", nullptr,
             [this](){return m_plater != nullptr && can_save(); }, this);
-
-        // Reload user presets from disk
-        append_menu_item(fileMenu, wxID_ANY, _L("Reload Presets") + "\t" + ctrl + "R", _L("Reload user presets from disk"),
-            [](wxCommandEvent&) { wxGetApp().reload_user_presets_from_disk(); }, "", nullptr,
-            []() { return true; }, this);
 #endif
 
 
@@ -2753,7 +2751,7 @@ void MainFrame::init_menubar_as_editor()
         append_menu_item(
             fileMenu, wxID_ANY, _L("Batch Preset Management"), wxString::Format(_L("Batch Preset Management")),
             [this](wxCommandEvent &) {
-                UserPresetsDialog dlg(this);
+                PresetExplorerDialog dlg(this);
                 dlg.ShowModal();
             },
             "", nullptr);

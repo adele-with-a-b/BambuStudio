@@ -2,6 +2,9 @@
 #include "UserPresetsDialog.hpp"
 #include "I18N.hpp"
 #include "GUI_App.hpp"
+#include "MainFrame.hpp"
+#include "UnsavedChangesDialog.hpp"
+#include "libslic3r/Preset.hpp"
 
 #include <slic3r/GUI/Widgets/CheckBox.hpp>
 #include <slic3r/GUI/Widgets/TabCtrl.hpp>
@@ -33,6 +36,14 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     m_search->SetSize({FromDIP(568), FromDIP(24)});
     m_search->SetCornerRadius(FromDIP(12));
     m_search->Bind(wxEVT_TEXT, [this](auto &evt) { on_search(evt.GetString()); });
+
+    // Compatible-only toggle
+    m_compatible_toggle = new SwitchButton(this);
+    m_compatible_toggle->SetFont(Label::Body_13);
+    m_compatible_toggle->SetMaxSize({FromDIP(220), -1});
+    m_compatible_toggle->SetLabels(_L("Compatible"), _L("All"));
+    m_compatible_toggle->SetValue(false);  // default: show all
+    m_compatible_toggle->Bind(wxEVT_TOGGLEBUTTON, [this](auto &evt) { evt.Skip(); on_compatible_toggle(evt.IsChecked()); });
 
     m_empty_panel = new wxPanel(this);
     m_empty_panel->SetMinSize({-1, FromDIP(360)});
@@ -81,10 +92,24 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
         on_all_checked(checked, true);
     });
     m_button_delete->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &evt) { delete_checked(); });
+
+    m_button_compare = new Button(this, _L("Compare"));
+    m_button_compare->SetBorderColorNormal(wxColor("#00AE42"));
+    m_button_compare->SetTextColorNormal(wxColor("#00AE42"));
+    m_button_compare->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) {
+        Preset::Type types[] = {Preset::TYPE_PRINTER, Preset::TYPE_FILAMENT, Preset::TYPE_PRINT};
+        std::string left, right;
+        if (m_checked_presets.size() >= 1) left = m_checked_presets[0];
+        if (m_checked_presets.size() >= 2) right = m_checked_presets[1];
+        DiffPresetDialog dlg(this, types[m_collection], left, right);
+        dlg.ShowModal();
+    });
+
     wxSizer *sizer_bottom = new wxBoxSizer(wxHORIZONTAL);
     sizer_bottom->Add(m_check_all, 0, wxALIGN_CENTER | wxLEFT, FromDIP(20));
     sizer_bottom->Add(label, 0, wxALIGN_CENTER | wxLEFT, FromDIP(8));
     sizer_bottom->Add(m_label_check_count, 1, wxALIGN_CENTER | wxLEFT, FromDIP(8));
+    sizer_bottom->Add(m_button_compare, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
     sizer_bottom->Add(m_button_delete, 0, wxALIGN_CENTER | wxLEFT | wxRIGHT, FromDIP(20));
 
     wxSizer *sizer = new wxBoxSizer(wxVERTICAL);
@@ -92,14 +117,19 @@ UserPresetsDialog::UserPresetsDialog(wxWindow *parent)
     sizer->Add(m_tab_ctrl, 0, wxALIGN_CENTER | wxALL, FromDIP(20));
     sizer->Add(m_switch_button, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
     sizer->Add(m_search, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
+    sizer->Add(m_compatible_toggle, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
     sizer->Add(m_scrolled, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(20));
     sizer->Add(m_empty_panel, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(20));
     sizer->Add(sizer_bottom, 0, wxEXPAND | wxALL, FromDIP(20));
 
     wxGetApp().UpdateDlgDarkUI(this);
     m_switch_button->Rescale();
+    m_compatible_toggle->Rescale();
 
     init_preset_list();
+    create_nozzle_filter_buttons(this);
+    sizer->Insert(4, m_nozzle_filter_sizer, 0, wxALIGN_CENTER | wxBOTTOM, FromDIP(10));
+
     update_preset_counts();
     on_collection_changed(0);
 
@@ -124,9 +154,199 @@ void UserPresetsDialog::init_preset_list()
                 }
             }
             presets.push_back(preset.name);
+
+            // Capture inherits and nozzle info for process presets
+            if (collection->type() == Preset::TYPE_PRINT) {
+                std::string inherits = preset.inherits();
+                m_preset_inherits[preset.name] = inherits;
+                m_preset_nozzle[preset.name] = get_nozzle_for_preset(inherits);
+            }
+
+            // Capture compatibility for all preset types
+            m_preset_compatible[preset.name] = preset.is_compatible;
         }
         m_presets.emplace_back(std::move(presets));
     }
+}
+
+std::string UserPresetsDialog::get_nozzle_for_preset(const std::string &inherits_name) const
+{
+    // Parse nozzle size from inherits name: "... 0.6 nozzle" → "0.6", no suffix → "0.4"
+    auto pos = inherits_name.find(" nozzle");
+    if (pos != std::string::npos && pos >= 3) {
+        // Walk back to find the nozzle diameter number
+        auto space = inherits_name.rfind(' ', pos - 1);
+        if (space != std::string::npos)
+            return inherits_name.substr(space + 1, pos - space - 1);
+    }
+    return "0.4";
+}
+
+void UserPresetsDialog::create_nozzle_filter_buttons(wxWindow *parent)
+{
+    // Collect unique nozzle sizes from process presets
+    std::set<std::string> nozzles;
+    for (auto &kv : m_preset_nozzle)
+        nozzles.insert(kv.second);
+
+    m_nozzle_filter_sizer = new wxBoxSizer(wxHORIZONTAL);
+    auto label = new Label(parent, _L("Nozzle:"));
+    label->SetFont(Label::Body_13);
+    label->SetForegroundColour(wxGetApp().dark_mode() ? wxColour(250, 250, 250) : wxColour("#262E30"));
+    m_nozzle_filter_sizer->Add(label, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(8));
+
+    // "All" button
+    auto btn_all = new Button(parent, _L("All"));
+    btn_all->SetFont(Label::Body_13);
+    btn_all->SetMinSize({FromDIP(48), FromDIP(24)});
+    btn_all->SetCornerRadius(FromDIP(12));
+    btn_all->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this](auto &) { on_nozzle_filter_changed(""); });
+    m_nozzle_filter_sizer->Add(btn_all, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+    m_nozzle_buttons.push_back(btn_all);
+
+    // One button per nozzle size
+    for (auto &nozzle : nozzles) {
+        auto btn = new Button(parent, from_u8(nozzle + "mm"));
+        btn->SetFont(Label::Body_13);
+        btn->SetMinSize({FromDIP(56), FromDIP(24)});
+        btn->SetCornerRadius(FromDIP(12));
+        btn->Bind(wxEVT_COMMAND_BUTTON_CLICKED, [this, nozzle](auto &) { on_nozzle_filter_changed(nozzle); });
+        m_nozzle_filter_sizer->Add(btn, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(4));
+        m_nozzle_buttons.push_back(btn);
+    }
+
+    // Set initial visual state (All selected) — don't apply filters yet, presets aren't created
+    m_nozzle_filter = "";
+    for (size_t i = 0; i < m_nozzle_buttons.size(); i++) {
+        if (i == 0) {
+            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#00AE42"));
+            m_nozzle_buttons[i]->SetTextColorNormal(*wxWHITE);
+        } else {
+            bool dark = wxGetApp().dark_mode();
+            m_nozzle_buttons[i]->SetBackgroundColor(dark ? wxColour(78, 78, 78) : wxColour("#F0F0F0"));
+            m_nozzle_buttons[i]->SetTextColorNormal(dark ? wxColour(250, 250, 250) : wxColour("#262E30"));
+        }
+    }
+}
+
+void UserPresetsDialog::on_nozzle_filter_changed(const std::string &nozzle)
+{
+    m_nozzle_filter = nozzle;
+
+    // Update button visuals — highlight the active one
+    for (size_t i = 0; i < m_nozzle_buttons.size(); i++) {
+        bool active;
+        if (i == 0)
+            active = nozzle.empty();  // "All" button
+        else {
+            // Match button label to nozzle
+            std::string btn_label = into_u8(m_nozzle_buttons[i]->GetLabel());
+            active = (btn_label == nozzle + "mm");
+        }
+        if (active) {
+            m_nozzle_buttons[i]->SetBackgroundColor(wxColour("#00AE42"));
+            m_nozzle_buttons[i]->SetTextColorNormal(*wxWHITE);
+        } else {
+            bool dark = wxGetApp().dark_mode();
+            m_nozzle_buttons[i]->SetBackgroundColor(dark ? wxColour(78, 78, 78) : wxColour("#F0F0F0"));
+            m_nozzle_buttons[i]->SetTextColorNormal(dark ? wxColour(250, 250, 250) : wxColour("#262E30"));
+        }
+        m_nozzle_buttons[i]->Refresh();
+    }
+
+    apply_filters();
+}
+
+void UserPresetsDialog::on_compatible_toggle(bool compatible_only)
+{
+    apply_filters();
+}
+
+void UserPresetsDialog::apply_filters()
+{
+    bool compatible_only = m_compatible_toggle && m_compatible_toggle->GetValue();
+
+    m_scrolled->Freeze();
+
+    // Determine which presets to show based on current collection
+    if (is_filament_list()) {
+        for (auto &filament : m_filament_presets) {
+            size_t visible = 0;
+            for (auto &preset : filament.second) {
+                auto sizer_it = m_preset_sizers.find(preset);
+                if (sizer_it == m_preset_sizers.end()) continue;
+
+                bool show = !compatible_only || m_preset_compatible[preset];
+                if (!show) {
+                    if (m_hiden_sizers.find(sizer_it->second) == m_hiden_sizers.end()) {
+                        sizer_it->second->Show(false);
+                        m_hiden_sizers.insert(sizer_it->second);
+                    }
+                } else {
+                    visible++;
+                    auto it = m_hiden_sizers.find(sizer_it->second);
+                    if (it != m_hiden_sizers.end()) {
+                        sizer_it->second->Show(true);
+                        m_hiden_sizers.erase(it);
+                    }
+                }
+            }
+            // Hide group header if all children hidden
+            auto group_it = m_filament_sizers.find(filament.first);
+            if (group_it != m_filament_sizers.end()) {
+                if (visible == 0) {
+                    if (m_hiden_sizers.find(group_it->second) == m_hiden_sizers.end()) {
+                        group_it->second->Show(false);
+                        m_hiden_sizers.insert(group_it->second);
+                    }
+                } else {
+                    auto it = m_hiden_sizers.find(group_it->second);
+                    if (it != m_hiden_sizers.end()) {
+                        group_it->second->Show(true);
+                        m_hiden_sizers.erase(it);
+                    }
+                }
+            }
+        }
+    } else {
+        auto &presets = m_presets[m_collection];
+        for (auto &preset : presets) {
+            auto sizer_it = m_preset_sizers.find(preset);
+            if (sizer_it == m_preset_sizers.end()) continue;
+
+            bool show = true;
+
+            // Nozzle filter (process tab only)
+            if (m_collection == 2 && !m_nozzle_filter.empty()) {
+                auto nozzle_it = m_preset_nozzle.find(preset);
+                if (nozzle_it != m_preset_nozzle.end() && nozzle_it->second != m_nozzle_filter)
+                    show = false;
+            }
+
+            // Compatible filter
+            if (show && compatible_only) {
+                auto compat_it = m_preset_compatible.find(preset);
+                if (compat_it != m_preset_compatible.end() && !compat_it->second)
+                    show = false;
+            }
+
+            if (!show) {
+                if (m_hiden_sizers.find(sizer_it->second) == m_hiden_sizers.end()) {
+                    sizer_it->second->Show(false);
+                    m_hiden_sizers.insert(sizer_it->second);
+                }
+            } else {
+                auto it = m_hiden_sizers.find(sizer_it->second);
+                if (it != m_hiden_sizers.end()) {
+                    sizer_it->second->Show(true);
+                    m_hiden_sizers.erase(it);
+                }
+            }
+        }
+    }
+
+    layout_preset_list();
+    m_scrolled->Thaw();
 }
 
 void UserPresetsDialog::create_preset_list(wxWindow *parent)
@@ -279,6 +499,8 @@ void UserPresetsDialog::on_collection_changed(int collection)
     m_tab_ctrl->SetItemBold(m_collection, true);
     m_search->GetTextCtrl()->ChangeValue("");
     GetSizer()->Show(m_switch_button, m_collection == 1);
+    if (m_nozzle_filter_sizer)
+        GetSizer()->Show(m_nozzle_filter_sizer, m_collection == 2);
     Freeze();
     create_preset_list(m_scrolled);
     layout_preset_list(true);

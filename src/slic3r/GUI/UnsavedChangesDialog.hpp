@@ -418,6 +418,8 @@ public:
 //------------------------------------------
 //          DiffPresetDialog
 //------------------------------------------
+wxString get_string_value(std::string opt_key, const DynamicPrintConfig& config);
+wxString get_full_label(std::string opt_key, const DynamicPrintConfig& config);
 class DiffPresetDialog : public DPIDialog
 {
     DiffViewCtrl*           m_tree              { nullptr };
@@ -446,9 +448,11 @@ class DiffPresetDialog : public DPIDialog
 
 public:
     DiffPresetDialog(MainFrame* mainframe);
+    DiffPresetDialog(wxWindow* parent, Preset::Type type, const std::string &left, const std::string &right, bool show_all = false);
     ~DiffPresetDialog(){};
 
     void                    show(Preset::Type type = Preset::TYPE_INVALID);
+    void                    show(Preset::Type type, const std::string &left, const std::string &right);
     void                    update_presets(Preset::Type type = Preset::TYPE_INVALID);
 
 protected:

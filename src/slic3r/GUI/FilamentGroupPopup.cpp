@@ -335,7 +335,7 @@ void FilamentGroupPopup::OnPaint(wxPaintEvent&)
     DrawRoundedCorner(16);
 }
 
-void FilamentGroupPopup::StartTimer() { m_timer->StartOnce(300); }
+void FilamentGroupPopup::StartTimer() { m_timer->StartOnce(100); }
 
 void FilamentGroupPopup::ResetTimer()
 {
@@ -364,9 +364,10 @@ void FilamentGroupPopup::Dismiss() {
 
 void FilamentGroupPopup::OnLeaveWindow(wxMouseEvent &)
 {
-    wxPoint pos = this->ScreenToClient(wxGetMousePosition());
-    if (this->GetClientRect().Contains(pos)) return;
-    StartTimer();
+    wxPoint screen_pos = wxGetMousePosition();
+    wxPoint popup_pos = this->ScreenToClient(screen_pos);
+    if (this->GetClientRect().Contains(popup_pos)) return;
+    Dismiss();
 }
 
 void FilamentGroupPopup::OnEnterWindow(wxMouseEvent &) { ResetTimer(); }

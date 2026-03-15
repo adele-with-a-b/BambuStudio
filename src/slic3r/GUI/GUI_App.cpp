@@ -5706,6 +5706,7 @@ void GUI_App::reload_user_presets_from_disk()
     BOOST_LOG_TRIVIAL(info) << "Reloading user presets from disk for user: " << user_id;
     preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
     mainframe->update_side_preset_ui();
+    load_current_presets();
 
     // Count new and modified presets for notification
     int new_prints = 0, new_filaments = 0;
