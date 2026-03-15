@@ -1985,6 +1985,11 @@ bool GUI_App::check_networking_version()
     if (!network_ver.empty()) {
         BOOST_LOG_TRIVIAL(info) << "get_network_agent_version=" << network_ver;
     }
+#ifdef BBL_INTERNAL_TESTING
+    // Dev builds accept any plugin version
+    m_networking_compatible = !network_ver.empty();
+    return m_networking_compatible;
+#else
     std::string studio_ver = SLIC3R_VERSION;
     if (network_ver.length() >= 8) {
         if (network_ver.substr(0,8) == studio_ver.substr(0,8)) {
@@ -1995,6 +2000,7 @@ bool GUI_App::check_networking_version()
 
     m_networking_compatible = false;
     return false;
+#endif
 }
 
 bool GUI_App::is_compatibility_version()
