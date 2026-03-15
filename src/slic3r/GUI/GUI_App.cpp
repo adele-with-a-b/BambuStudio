@@ -3413,7 +3413,7 @@ void GUI_App::copy_network_if_available()
 
 bool GUI_App::on_init_network(bool try_backup)
 {
-    int  load_agent_dll       = Slic3r::NetworkAgent::initialize_network_module(false, false); // Patched: skip cert validation
+    int  load_agent_dll       = Slic3r::NetworkAgent::initialize_network_module(false, !app_config->get_bool("ignore_module_cert"));
     bool create_network_agent = false;
 __retry:
     if (!load_agent_dll) {
@@ -3434,7 +3434,7 @@ __retry:
             if (try_backup) {
                 int result = Slic3r::NetworkAgent::unload_network_module();
                 BOOST_LOG_TRIVIAL(info) << "on_init_network, version mismatch, unload_network_module, result = " << result;
-                load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(true, false); // Patched: skip cert validation
+                load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(true, !app_config->get_bool("ignore_module_cert"));
                 try_backup = false;
                 goto __retry;
             }
@@ -4170,7 +4170,7 @@ void GUI_App::request_helio_supported_data()
     std::string helio_api_url = Slic3r::HelioQuery::get_helio_api_url();
     std::string helio_api_key = Slic3r::HelioQuery::get_helio_pat();
 
-    if (!HelioQuery::global_printers_fully_loaded || !HelioQuery::global_materials_fully_loaded) {
+    if (HelioQuery::global_supported_printers.size() <= 0 || HelioQuery::global_supported_materials.size() <= 0) {
         Slic3r::HelioQuery::request_all_support_machine(helio_api_url, helio_api_key);
         Slic3r::HelioQuery::request_all_support_materials(helio_api_url, helio_api_key);
     }
@@ -5707,25 +5707,32 @@ void GUI_App::reload_user_presets_from_disk()
     preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
     mainframe->update_side_preset_ui();
 
-    // Find new presets and select the last one found
-    std::string new_print, new_filament;
+    // Count new and modified presets for notification
+    int new_prints = 0, new_filaments = 0;
     for (const auto& p : preset_bundle->prints)
         if (p.is_user() && old_prints.find(p.name) == old_prints.end())
-            new_print = p.name;
+            new_prints++;
     for (const auto& p : preset_bundle->filaments)
         if (p.is_user() && old_filaments.find(p.name) == old_filaments.end())
-            new_filament = p.name;
+            new_filaments++;
 
-    if (!new_print.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "New process preset found, selecting: " << new_print;
-        auto tab = get_tab(Preset::TYPE_PRINT);
-        if (tab) tab->select_preset(new_print);
+    // Show toast notification with reload stats
+    std::string msg = "Presets reloaded";
+    if (new_prints > 0 || new_filaments > 0) {
+        msg += ": ";
+        std::vector<std::string> parts;
+        if (new_prints > 0)
+            parts.push_back(std::to_string(new_prints) + " new process");
+        if (new_filaments > 0)
+            parts.push_back(std::to_string(new_filaments) + " new filament");
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i > 0) msg += ", ";
+            msg += parts[i];
+        }
     }
-    if (!new_filament.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "New filament preset found, selecting: " << new_filament;
-        auto tab = get_tab(Preset::TYPE_FILAMENT);
-        if (tab) tab->select_preset(new_filament);
-    }
+    BOOST_LOG_TRIVIAL(info) << msg;
+    if (plater())
+        plater()->get_notification_manager()->push_notification(msg);
 }
 
 //BBS reload when logout

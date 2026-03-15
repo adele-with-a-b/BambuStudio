@@ -2758,6 +2758,11 @@ void MainFrame::init_menubar_as_editor()
             },
             "", nullptr);
 
+        // Reload user presets from disk
+        append_menu_item(fileMenu, wxID_ANY, _L("Reload Presets") + "\t" + ctrl + _L("Shift+") + "R", _L("Reload user presets from disk"),
+            [](wxCommandEvent&) { wxGetApp().reload_user_presets_from_disk(); }, "", nullptr,
+            []() { return true; }, this);
+
         fileMenu->AppendSeparator();
 
 #ifndef __APPLE__
