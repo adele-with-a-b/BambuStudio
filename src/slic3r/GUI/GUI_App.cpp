@@ -22,6 +22,7 @@
 #include <exception>
 #include <cstdlib>
 #include <regex>
+#include <set>
 #include <thread>
 #include <string_view>
 #include <boost/algorithm/string/predicate.hpp>
@@ -5705,9 +5706,8 @@ void GUI_App::reload_user_presets_from_disk()
 
     BOOST_LOG_TRIVIAL(info) << "Reloading user presets from disk for user: " << user_id;
     preset_bundle->load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::Enable);
-    mainframe->update_side_preset_ui();
 
-    // Count new and modified presets for notification
+    // Count new presets
     int new_prints = 0, new_filaments = 0;
     for (const auto& p : preset_bundle->prints)
         if (p.is_user() && old_prints.find(p.name) == old_prints.end())
@@ -5715,6 +5715,10 @@ void GUI_App::reload_user_presets_from_disk()
     for (const auto& p : preset_bundle->filaments)
         if (p.is_user() && old_filaments.find(p.name) == old_filaments.end())
             new_filaments++;
+
+    // Only update UI if presets changed
+    if (new_prints > 0 || new_filaments > 0)
+        mainframe->update_side_preset_ui();
 
     // Show toast notification with reload stats
     std::string msg = "Presets reloaded";
