@@ -26,6 +26,7 @@ endif ()
 bambustudio_add_cmake_project(wxWidgets
     GIT_REPOSITORY "https://github.com/bambulab/wxWidgets"
     GIT_TAG master
+    PATCH_COMMAND /bin/sh -c "find . \\( -name CMakeLists.txt -o -name '*.cmake' \\) -exec sed -i.bak 's/cmake_minimum_required(VERSION 2\\.[0-9.]*)/cmake_minimum_required(VERSION 3.5)/g' {} +"
     DEPENDS ${PNG_PKG} ${ZLIB_PKG} ${EXPAT_PKG} ${TIFF_PKG} ${JPEG_PKG}
     CMAKE_ARGS
         -DwxBUILD_PRECOMP=ON
