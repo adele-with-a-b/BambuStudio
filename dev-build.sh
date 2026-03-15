@@ -102,3 +102,38 @@ echo ""
 echo "✅ Installed: $APP_DST"
 echo "   Data dir:  ~/Library/Application Support/BambuStudioInternal/"
 echo "   Presets:   ~/Library/Application Support/BambuStudioInternal/user/1615318752/"
+
+# Ensure network plugin is available (needed for login)
+INTERNAL_PLUGINS="$HOME/Library/Application Support/BambuStudioInternal/plugins"
+if [ ! -f "$INTERNAL_PLUGINS/libbambu_networking.dylib" ]; then
+    echo "→ Network plugin missing — searching for a copy..."
+    FOUND=""
+    for src in \
+        "$HOME/Library/Application Support/BambuStudioBeta/plugins" \
+        "$HOME/Library/Application Support/BambuStudio/plugins" \
+        "/Applications/BambuStudio.app/Contents/Frameworks/plugins" \
+        "/Applications/BambuStudio Beta.app/Contents/Frameworks/plugins"; do
+        if [ -f "$src/libbambu_networking.dylib" ]; then
+            FOUND="$src"
+            break
+        fi
+    done
+    if [ -n "$FOUND" ]; then
+        mkdir -p "$INTERNAL_PLUGINS"
+        cp -R "$FOUND/"* "$INTERNAL_PLUGINS/"
+        echo "  ✅ Network plugin copied from $(basename "$(dirname "$FOUND")")"
+    else
+        echo "  ⚠️  No network plugin found. Install BambuStudio Beta first, then re-run."
+        echo "     Download: https://bambulab.com/en/download/studio"
+    fi
+fi
+
+# Ensure network plugin is available (copy from Beta if missing)
+INTERNAL_PLUGINS="$HOME/Library/Application Support/BambuStudioInternal/plugins"
+BETA_PLUGINS="$HOME/Library/Application Support/BambuStudioBeta/plugins"
+if [ ! -f "$INTERNAL_PLUGINS/libbambu_networking.dylib" ] && [ -f "$BETA_PLUGINS/libbambu_networking.dylib" ]; then
+    echo "→ Copying network plugin from Beta..."
+    mkdir -p "$INTERNAL_PLUGINS"
+    cp -R "$BETA_PLUGINS/"* "$INTERNAL_PLUGINS/"
+    echo "  ✅ Network plugin installed"
+fi
