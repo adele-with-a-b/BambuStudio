@@ -110,6 +110,9 @@ echo "✅ Installed: $APP_DST"
 echo "   Data dir:  ~/Library/Application Support/BambuStudioInternal/"
 echo "   Presets:   ~/Library/Application Support/BambuStudioInternal/user/1615318752/"
 
+# Ensure required data directories exist (Boost.Log crashes without log/)
+mkdir -p "$HOME/Library/Application Support/BambuStudioInternal/log"
+
 # Ensure network plugin is available (needed for login)
 INTERNAL_PLUGINS="$HOME/Library/Application Support/BambuStudioInternal/plugins"
 if [ ! -f "$INTERNAL_PLUGINS/libbambu_networking.dylib" ]; then
@@ -133,14 +136,4 @@ if [ ! -f "$INTERNAL_PLUGINS/libbambu_networking.dylib" ]; then
         echo "  ⚠️  No network plugin found. Install BambuStudio Beta first, then re-run."
         echo "     Download: https://bambulab.com/en/download/studio"
     fi
-fi
-
-# Ensure network plugin is available (copy from Beta if missing)
-INTERNAL_PLUGINS="$HOME/Library/Application Support/BambuStudioInternal/plugins"
-BETA_PLUGINS="$HOME/Library/Application Support/BambuStudioBeta/plugins"
-if [ ! -f "$INTERNAL_PLUGINS/libbambu_networking.dylib" ] && [ -f "$BETA_PLUGINS/libbambu_networking.dylib" ]; then
-    echo "→ Copying network plugin from Beta..."
-    mkdir -p "$INTERNAL_PLUGINS"
-    cp -R "$BETA_PLUGINS/"* "$INTERNAL_PLUGINS/"
-    echo "  ✅ Network plugin installed"
 fi
