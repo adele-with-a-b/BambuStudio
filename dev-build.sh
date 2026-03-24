@@ -33,10 +33,17 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
-DEPS="$PROJECT_DIR/../BambuStudio_dep/usr/local"
-if [ ! -d "$DEPS" ] && [ -d "$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local" ]; then
-    DEPS="$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local"
-fi
+
+# Find deps: prefer deps_build/ inside repo, fall back to parallel BambuStudio_dep/
+DEPS=""
+for d in \
+    "$PROJECT_DIR/deps_build/destdir/usr/local" \
+    "$PROJECT_DIR/deps_build/usr/local" \
+    "$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local" \
+    "$PROJECT_DIR/../BambuStudio_dep/usr/local"; do
+    [ -d "$d" ] && DEPS="$d" && break
+done
+[ -z "$DEPS" ] && { echo "❌ Dependencies not found. Run: ./install.sh --bambu"; exit 1; }
 APP_NAME="BambuStudio Dev"
 APP_DST="/Applications/$APP_NAME.app"
 
