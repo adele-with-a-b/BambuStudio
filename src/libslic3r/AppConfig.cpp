@@ -506,7 +506,12 @@ void AppConfig::set_defaults()
         set_bool("show_support_recommend_dialog", true);
     }
     if (get("ignore_module_cert").empty()) {
+#ifdef BBL_INTERNAL_TESTING
+        // Dev builds skip cert validation to allow loading the official Beta/Release network plugin
+        set_bool("ignore_module_cert", true);
+#else
         set_bool("ignore_module_cert", false);
+#endif
     }
     if (get("webview_auto_fill").empty()) {
         set_bool("webview_auto_fill", true);
