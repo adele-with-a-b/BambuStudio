@@ -33,10 +33,27 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
-DEPS="$PROJECT_DIR/../BambuStudio_dep/usr/local"
-if [ ! -d "$DEPS" ] && [ -d "$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local" ]; then
-    DEPS="$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local"
+# Deps can live at several historical locations. Check each in order until
+# we find a usable install prefix with include/ and lib/ populated.
+DEPS_CANDIDATES=(
+    "$PROJECT_DIR/../BambuStudio_dep/usr/local"
+    "$PROJECT_DIR/../BambuStudio_dep/destdir/usr/local"
+    "$PROJECT_DIR/deps_build/usr/local"
+    "$PROJECT_DIR/deps_build/destdir/usr/local"
+)
+DEPS=""
+for candidate in "${DEPS_CANDIDATES[@]}"; do
+    if [ -d "$candidate/include" ] && [ -d "$candidate/lib" ]; then
+        DEPS="$candidate"
+        break
+    fi
+done
+if [ -z "$DEPS" ]; then
+    echo "ERROR: could not locate deps install prefix. Searched:"
+    printf '  %s\n' "${DEPS_CANDIDATES[@]}"
+    exit 1
 fi
+echo "Using DEPS=$DEPS"
 APP_NAME="BambuStudio Dev"
 APP_DST="/Applications/$APP_NAME.app"
 
