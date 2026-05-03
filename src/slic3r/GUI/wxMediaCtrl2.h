@@ -44,7 +44,10 @@ public:
     void SetConstrainByAspectRatio(bool constrain) { m_constrain_by_aspect_ratio = constrain; }
     bool GetConstrainByAspectRatio() const { return m_constrain_by_aspect_ratio; }
 
-    static constexpr wxMediaState MEDIASTATE_BUFFERING = (wxMediaState) 6;
+    // const not constexpr: AppleClang 21+ rejects constexpr on this form;
+    // const preserves the same in-class definition without the stricter
+    // compile-time-eval requirement. (See dev-branch commit 2dffd5c45.)
+    static const wxMediaState MEDIASTATE_BUFFERING = (wxMediaState) 6;
 
 protected:
     void DoSetSize(int x, int y, int width, int height, int sizeFlags) override;
