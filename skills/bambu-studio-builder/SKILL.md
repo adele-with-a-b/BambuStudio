@@ -235,6 +235,34 @@ During collapse/expand animation in `wxDataViewCtrl`, parent node text flashes a
 ### Filament sync overwrite
 When syncing from printer, custom filament selection gets overwritten with the system profile matching the AMS-reported filament. No setting to disable. Workaround: re-select custom profile after sync.
 
+### Develop mode grays out the Advanced toggle
+
+**Two unrelated "developer" concepts get confused. Keep them separate:**
+
+| Concept | What it is | How to enable | Required for |
+|---|---|---|---|
+| **Printer Developer Mode** | Setting on the H2C touchscreen | Printer Settings → Developer Mode | LAN-mode print sending from the Dev build (combined with `BBL_RELEASE_TO_PUBLIC=0` at compile time) |
+| **Slicer `user_mode: develop`** | UI verbosity level in Bambu Studio | Preferences → Develop mode checkbox (writes `user_mode: develop` in `BambuStudio.conf`) | Showing extra internal/debug settings in Process/Filament/Printer tabs |
+
+They share the word "developer" and do completely different things. Enabling slicer Develop mode has **zero** effect on LAN printing — only the printer-side toggle + the compile flag matter for that.
+
+**The gotcha:** turning on slicer Develop mode **disables the Advanced/Simple switch** in the param panel sidebar. The switch still renders but won't respond to clicks. This is intentional — see `src/slic3r/GUI/ParamsPanel.cpp::ParamsPanel::update_mode()`:
+
+```cpp
+if (app_mode == comDevelop)
+{
+    mode_view->Disable();
+    return;
+}
+```
+
+Why: the switch is binary (Simple ↔ Advanced). Develop is a superset above Advanced, so the switch has nowhere to put it. Rather than let the switch silently demote you from Develop to Simple, the code freezes it until you leave Develop mode via Preferences.
+
+**Fix if stuck in this state:** Preferences → uncheck Develop mode (calls `save_mode(comAdvanced)`, re-enables the switch). Or edit `BambuStudio.conf` directly: change `"user_mode": "develop"` to `"advanced"` while the app is closed.
+
+**Rule of thumb for the Dev build:** leave `user_mode` at `advanced`. Printer Developer Mode is what you need for LAN printing, not slicer Develop mode.
+
+
 ## Import Configs (existing feature)
 File → Import → Import Configs handles `.json`, `.zip`, `.bbscfg`, `.bbsflmt`. Validates, detects type from keys (`print_settings_id` → process, `filament_settings_id` → filament), resolves `inherits`, generates `.info` file automatically via `preset.save()`, prompts on overwrite conflicts.
 
