@@ -256,7 +256,7 @@ if (app_mode == comDevelop)
 }
 ```
 
-Why: the switch is binary (Simple ↔ Advanced). Develop is a superset above Advanced, so the switch has nowhere to put it. Rather than let the switch silently demote you from Develop to Simple, the code freezes it until you leave Develop mode via Preferences.
+Why: Develop is a visibility superset of Advanced — every Advanced-gated field is already showing, plus the Develop-gated ones. The switch would have no effect on what you see, so the code disables it rather than present a redundant control. To get back to just-Advanced visibility, turn Develop off in Preferences.
 
 **Fix if stuck in this state:** Preferences → uncheck Develop mode (calls `save_mode(comAdvanced)`, re-enables the switch). Or edit `BambuStudio.conf` directly: change `"user_mode": "develop"` to `"advanced"` while the app is closed.
 
