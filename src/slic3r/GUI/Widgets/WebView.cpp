@@ -385,6 +385,17 @@ bool WebView::RunScript(wxWebView *webView, wxString const &javascript)
             && javascript.find("studio_userlogin") == wxString::npos)
         wxLogMessage("Running JavaScript:\n%s\n", javascript);
 
+    // Skip JS evaluation on hidden webviews. Several panels keep a pool of
+    // wxWebView instances that are Hide()'d and swapped in on demand (see
+    // WebViewPanel::SetWebviewShow). Pushing JS into a hidden view still wakes
+    // the WebContent process on macOS (runJavaScriptInFrameInScriptWorld cancels
+    // ProcessThrottler suspension) while the events delivered to its NSView are
+    // silently dropped because it is setHidden:YES. After sleep/wake on macOS
+    // this has been observed to produce a minutes-long "frozen input" state for
+    // the user -- the window has focus but the hit-test view is hidden.
+    if (webView == nullptr || !webView->IsShownOnScreen())
+        return false;
+
     try {
 #ifdef __WIN32__
         ICoreWebView2 *   webView2 = (ICoreWebView2 *) webView->GetNativeBackend();
