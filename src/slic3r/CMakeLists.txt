@@ -292,6 +292,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/Monitor.hpp
     GUI/WebViewDialog.cpp
     GUI/WebViewDialog.hpp
+    GUI/SystemShare.hpp
+    GUI/SystemShare.cpp
     GUI/PrinterWebView.cpp
     GUI/PrinterWebView.hpp
     GUI/WebDownPluginDlg.hpp
@@ -664,6 +666,7 @@ if (APPLE)
             GUI/InstanceCheckMac.h
             GUI/CameraFullscreenMac.mm
             GUI/CameraFullscreenMac.hpp
+            GUI/SystemShare_mac.mm
             GUI/wxMediaCtrl2.mm
             GUI/wxMediaCtrl2.h
             GUI/wxMediaCtrl3.h
@@ -677,6 +680,7 @@ else ()
             GUI/wxMediaCtrl2.h
             GUI/wxMediaCtrl3.cpp
             GUI/wxMediaCtrl3.h
+            GUI/SystemShare_fallback.cpp
         )
 endif ()
 
