@@ -39,3 +39,13 @@ compile_commands.json
 .worktrees/
 **/dist/
 
+# Local build prefixes — never commit, never sweep with `git stash -u`.
+# Lives inside the repo so deps travel with `mv` operations and never end
+# up orphaned. dev-build.sh's DEPS_CANDIDATES (candidates 3 and 4) finds
+# this layout; the legacy sibling layout `../BambuStudio_dep/` is also
+# supported but we prefer in-repo so the build is self-contained.
+deps_build/
+# Defensive: catch the legacy sibling layout if someone ever places it
+# inside the repo by mistake (it shouldn't be tracked there either).
+BambuStudio_dep/
+.claude/
