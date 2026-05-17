@@ -909,6 +909,49 @@ namespace Slic3r
             }
         }
 
+        // LAN-only stale-MQTT auto-reconnect.
+        //
+        // For LAN-mode-only printers (no Bambu cloud login), nothing else in this
+        // refresher runs: check_pushing()/refresh_connection() are gated on
+        // is_user_login() above, so the keep_alive() that would otherwise probe
+        // the MQTT session never fires. After the app sits idle long enough that
+        // macOS App Nap, the network stack, or the printer side closes the
+        // underlying TCP socket, the next publish_gcode() returns
+        // BAMBU_NETWORK_ERR_SEND_MSG_FAILED (-4) and the user has to manually
+        // re-select the printer to re-trigger the disconnect+reconnect path in
+        // DeviceManager::set_selected_machine.
+        //
+        // Detect the stale-socket condition (LAN printer + has access code +
+        // is_connected() false beyond DISCONNECT_TIMEOUT) and run the same
+        // reconnect path automatically. Throttled to one attempt per
+        // LAN_RECONNECT_INTERVAL_MS to avoid hammering on persistent failures
+        // (e.g. printer powered off).
+        if (obj->is_lan_mode_printer() && obj->has_access_right() &&
+            Slic3r::GUI::wxGetApp().is_studio_active() &&
+            !obj->is_connected())
+        {
+            constexpr int LAN_RECONNECT_INTERVAL_MS = 10 * 1000;
+            static std::chrono::system_clock::time_point last_lan_reconnect_attempt{};
+            const auto now = std::chrono::system_clock::now();
+            const auto since_last_attempt =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - last_lan_reconnect_attempt).count();
+
+            if (since_last_attempt > LAN_RECONNECT_INTERVAL_MS)
+            {
+                last_lan_reconnect_attempt = now;
+                BOOST_LOG_TRIVIAL(info)
+                    << "LAN auto-reconnect: stale MQTT socket detected for dev_id="
+                    << BBLCrossTalk::Crosstalk_DevId(obj->get_dev_id())
+                    << ", re-selecting machine to trigger disconnect+reconnect";
+                // Re-selecting the same LAN id hits the same-id-LAN branch in
+                // set_selected_machine (DevManager.cpp), which calls
+                // m_agent->disconnect_printer(), obj->reset(), then
+                // obj->connect(...). This is the exact path the user takes
+                // manually via the Devices tab.
+                m_manager->set_selected_machine(obj->get_dev_id());
+            }
+        }
+
         // certificate
         agent->install_device_cert(obj->get_dev_id(), obj->is_lan_mode_printer());
     }
