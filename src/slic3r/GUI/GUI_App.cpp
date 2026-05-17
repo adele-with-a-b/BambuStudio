@@ -2660,6 +2660,27 @@ void GUI_App::on_start_subscribe_again(std::string dev_id)
     start_subscribe_timer->Start(5000, wxTIMER_ONE_SHOT);
 }
 
+void GUI_App::try_load_last_machine_on_alive(const std::string &dev_id)
+{
+    if (dev_id.empty()) return;
+    if (!m_agent || !m_device_manager) return;
+
+    // Only retry for the machine the user had previously selected; this
+    // method is a hot path called for every SSDP packet, so we filter
+    // aggressively before doing anything observable.
+    const auto &last = m_device_manager->get_user_last_machine();
+    if (last.empty() || last != dev_id) return;
+
+    // If a machine is already selected we have nothing to fix; InnerLoad
+    // would early-return anyway, but we skip the call entirely to keep
+    // the log clean.
+    if (m_device_manager->get_selected_machine() != nullptr) return;
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": SSDP-triggered retry for "
+        << BBLCrossTalk::Crosstalk_DevId(dev_id);
+    m_load_last_machine.InnerLoad(m_agent, m_device_manager);
+}
+
 std::string GUI_App::get_local_models_path()
 {
     std::string local_path = "";
