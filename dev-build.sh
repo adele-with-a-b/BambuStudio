@@ -68,12 +68,21 @@ if [ "$CMD" = "clean" ] || [ "$CMD" = "nuke" ] || [ "$CMD" = "configure" ]; then
     echo "Configuring..."
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
+    # Force the SDK to Xcode's full SDK rather than letting cmake autodetect
+    # via xcrun, which on this machine returns the Command Line Tools SDK
+    # by default (the two often drift versions). Mismatched SDK + clang
+    # cause libc++ #include_next failures ("<cstddef> tried including
+    # <stddef.h> but didn't find libc++'s <stddef.h>") because cmake's
+    # IMPLICIT_INCLUDE_DIRECTORIES probe records CLT paths but isysroot
+    # then points at Xcode's, breaking the strip-implicit-dirs logic.
+    XCODE_SDK="$(xcrun --sdk macosx --show-sdk-path)"
     cmake "$PROJECT_DIR" \
         -DCMAKE_PREFIX_PATH="$DEPS" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_MACOSX_RPATH=ON \
         -DCMAKE_MACOSX_BUNDLE=ON \
         -DCMAKE_OSX_ARCHITECTURES=arm64 \
+        -DCMAKE_OSX_SYSROOT="$XCODE_SDK" \
         -DBBL_RELEASE_TO_PUBLIC=0 \
         -DBBL_INTERNAL_TESTING=1
     [ "$CMD" = "configure" ] && { echo "✅ Configure complete."; exit 0; }
