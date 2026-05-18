@@ -106,11 +106,29 @@ fi
 echo "Installing to $APP_DST..."
 APP_SRC="$BUILD_DIR/src/BambuStudio.app"
 
-# Fix resources symlink if present
-resources_path=$(readlink "$APP_SRC/Contents/Resources" 2>/dev/null || true)
-if [ -L "$APP_SRC/Contents/Resources" ] && [ -n "$resources_path" ]; then
-    rm "$APP_SRC/Contents/Resources"
-    cp -R "$resources_path" "$APP_SRC/Contents/Resources"
+# Resources handling. The cmake build (src/CMakeLists.txt) drops a symlink
+# from $APP_SRC/Contents/Resources into $PROJECT_DIR/resources. The first
+# install run breaks the symlink and replaces it with a `cp -R` copy --
+# that's what makes the installed .app self-contained. But it also means
+# subsequent installs never refresh resources unless we explicitly rsync
+# from the project tree. Without this rsync, new SVGs / images / data
+# files added between builds silently never make it into /Applications,
+# and the running app crashes at first reference (see the launch-crash
+# investigation around 2026-05-17 where new share*.svg files were missing
+# from the bundle and the app aborted in WebViewPanel ctor).
+#
+# Always pull the live project resources into the build's .app first,
+# then rm+cp into /Applications. rsync --delete keeps stale files from
+# accumulating across renames in the project tree.
+RESOURCES_SRC="$PROJECT_DIR/resources"
+APP_RES="$APP_SRC/Contents/Resources"
+if [ -L "$APP_RES" ]; then
+    # First install: replace the symlink with a fresh copy.
+    rm "$APP_RES"
+    cp -R "$RESOURCES_SRC" "$APP_RES"
+elif [ -d "$APP_RES" ]; then
+    # Subsequent installs: refresh from the project tree.
+    rsync -a --delete "$RESOURCES_SRC/" "$APP_RES/"
 fi
 
 rm -rf "$APP_DST"
@@ -123,6 +141,38 @@ for icon in IconDev.icns; do
 done
 [ -f "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" ] && \
     cp "$PROJECT_DIR/resources/images/BambuStudioDev-mac_256px.ico" "$APP_DST/Contents/Resources/images/BambuStudio-mac_256px.ico"
+
+# Code-sign with a stable self-signed identity so macOS TCC permission
+# grants persist across rebuilds. Without this, every recompile produces
+# a new ad-hoc signature, TCC sees a "different" app, and the user has
+# to re-grant Files/Folders/Camera/Network permissions on every build.
+#
+# The identity below is a self-signed code-signing cert in the login
+# keychain. Setup is one-time per machine: Keychain Access -> Certificate
+# Assistant -> Create a Certificate, name "BambuStudioDev", self-signed
+# root, Code Signing type. After creation, mark Always Trust under the
+# certificate's Trust settings so it shows up in the codesigning identity
+# list. Then `security find-identity -v -p codesigning` will list it.
+#
+# The signing must happen AFTER the icon swap above; rewriting Icon.icns
+# invalidates any prior signature and codesign --force regenerates it
+# over the final bundle contents.
+# Note: NOT using --options runtime (Hardened Runtime). Hardened Runtime
+# enforces Library Validation, which requires every loaded dylib to have a
+# Team ID matching the main binary's Team ID. Our self-signed cert has no
+# Team ID, while Homebrew dylibs (zstd, etc.) are signed by Homebrew with
+# their own Team ID -- mismatch -> dyld refuses to load -> app crashes at
+# launch ("mapping process and mapped file (non-platform) have different
+# Team IDs"). Hardened Runtime's main purpose is notarization, which we
+# don't need for a local dev build, so we leave it off.
+SIGN_IDENTITY="14F9F6CEB1DC42167435386D87623D555E50DAEE"
+if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
+    echo "  codesign: signed with BambuStudioDev identity"
+else
+    echo "  codesign: BambuStudioDev cert not found, falling back to ad-hoc (TCC grants will reset on each build)"
+    codesign --force --deep --sign - "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
+fi
 
 echo ""
 echo "✅ Installed: $APP_DST"
