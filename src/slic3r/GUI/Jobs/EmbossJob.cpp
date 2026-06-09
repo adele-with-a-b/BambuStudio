@@ -261,7 +261,7 @@ bool recreate_model_volume(ModelObject *model_object, int volume_idx, const Tria
     // helpers historically did not.
     if (mesh.its.indices.empty()) {
         BOOST_LOG_TRIVIAL(warning)
-            << "[EMBOSS-RECOVERY] recreate_model_volume: empty mesh (no indices); "
+            << "recreate_model_volume: empty mesh (no indices); "
                "keeping previous volume, not committing an empty text_shape.";
         return false;
     }
@@ -292,7 +292,7 @@ bool create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &m
     // crashes slicing-prep.
     if (mesh.its.indices.empty()) {
         BOOST_LOG_TRIVIAL(warning)
-            << "[EMBOSS-RECOVERY] create_text_volume: empty mesh (no indices); "
+            << "create_text_volume: empty mesh (no indices); "
                "not creating an empty text_shape volume.";
         return false;
     }
@@ -442,7 +442,6 @@ void UpdateSurfaceVolumeJob::process(Ctl &ctl)
     // (e.g. on a worker that didn't get an alt stack at creation), this outer
     // guard catches it and degrades to a JobException instead of a hard crash.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateSurfaceVolumeJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             try {
@@ -459,7 +458,6 @@ void UpdateSurfaceVolumeJob::process(Ctl &ctl)
             }
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateSurfaceVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
                                 "shrinking it, or simplifying the surface underneath.").c_str());
@@ -489,7 +487,6 @@ void UpdateJob::process(Ctl &ctl)
     // which is OUTSIDE the cut_surface guard. Wrap the whole mesh-generating
     // body so the crash degrades to a user toast instead of killing the app.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             m_result = try_create_mesh(*m_input.base);
@@ -499,7 +496,6 @@ void UpdateJob::process(Ctl &ctl)
                 throw JobException("Created text volume is empty. Change text or font.");
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
@@ -559,7 +555,6 @@ void CreateObjectJob::process(Ctl &ctl)
     // worker-stack-overflow risk as UpdateJob; the downstream bed/transform
     // math below is plain geometry and needs no guard.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             if (m_input.base->merge_shape || !m_input.base->text_lines.empty()) { // || m_input.base->shape.shapes_with_ids.size() > 20
@@ -569,7 +564,6 @@ void CreateObjectJob::process(Ctl &ctl)
             }
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 
@@ -688,7 +682,6 @@ void CreateSurfaceVolumeJob::process(Ctl &ctl)
         throw JobException("Bad input data for CreateSurfaceVolumeJob.");
     // Defense-in-depth signal guard, matching UpdateSurfaceVolumeJob's pattern.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateSurfaceVolumeJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             try {
@@ -699,7 +692,6 @@ void CreateSurfaceVolumeJob::process(Ctl &ctl)
             }
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateSurfaceVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
                                 "shrinking it, or simplifying the surface underneath.").c_str());
@@ -721,13 +713,11 @@ void CreateVolumeJob::process(Ctl &ctl)
     // Guard the CGAL text/glyph mesh-generation; same worker-stack-overflow
     // risk as UpdateJob (create_mesh -> try_create_mesh -> per-glyph cut).
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateVolumeJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             m_result = create_mesh(*m_input.base);
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
@@ -1610,7 +1600,6 @@ void GenerateTextJob::process(Ctl &ctl)
     // mid-body JobException throws and bare returns propagate cleanly through
     // the void guard lambda.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] GenerateTextJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             create_all_char_mesh(*m_input.m_data_update.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
@@ -1634,7 +1623,6 @@ void GenerateTextJob::process(Ctl &ctl)
             generate_mesh_according_points(m_input);
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] GenerateTextJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
@@ -1686,7 +1674,7 @@ void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
     // operate on the wrong one. Bailing here keeps that block correct.
     if (m_input.m_final_text_mesh.its.indices.empty()) {
         BOOST_LOG_TRIVIAL(warning)
-            << "[EMBOSS-RECOVERY] GenerateTextJob::finalize: final text mesh is "
+            << "GenerateTextJob::finalize: final text mesh is "
                "empty; not committing a volume. Keeping previous geometry.";
         if (auto *plater = wxGetApp().plater()) {
             if (auto *nm = plater->get_notification_manager()) {
@@ -2267,7 +2255,6 @@ void CreateObjectTextJob::process(Ctl &ctl) {
     // math after it is plain geometry but is cheap and stays inside the unit;
     // the mid-body bare return propagates cleanly through the void guard.
     bool hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectTextJob::process: entering signal-guarded region";
     Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
             create_all_char_mesh(*m_input.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
@@ -2283,7 +2270,6 @@ void CreateObjectTextJob::process(Ctl &ctl) {
             calc_position_points(m_input.m_position_points, text_lengths, m_input.text_info.m_text_gap, Vec3d(1, 0, 0));
         },
         [&]{ hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectTextJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
     if (hw_fail)
         throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }

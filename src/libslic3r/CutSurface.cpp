@@ -42,7 +42,7 @@ using namespace Slic3r;
 #include "ClipperUtils.hpp" // union_ex + offset_ex
 #include "Exception.hpp"   // HardCrash
 #include "TryCatchSignal.hpp"
-#include <boost/log/trivial.hpp> // EMBOSS-RECOVERY instrumentation (temporary)
+#include <boost/log/trivial.hpp>
 
 namespace priv {
 
@@ -555,7 +555,6 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     // post-corefine Epeck work) as well as in corefine itself.
     SurfaceCut result;
     bool       cut_hw_fail = false;
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] cut_surface: entering signal-guarded region";
     try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
         [&]() -> void {
 
@@ -644,10 +643,9 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
 
         }, // end of signal-guarded fn()
         [&]() { cut_hw_fail = true; });
-    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] cut_surface: exited signal-guarded region, hw_fail=" << cut_hw_fail;
 
     if (cut_hw_fail) {
-        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] cut_surface stack overflow caught -- recovering as HardCrash";
+        BOOST_LOG_TRIVIAL(error) << "cut_surface stack overflow caught -- recovering as HardCrash";
         throw Slic3r::HardCrash("CGAL surface cut crashed (likely stack overflow on near-degenerate input).");
     }
 
@@ -1497,7 +1495,7 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
     const size_t shape_v = cgal_shape.number_of_vertices();
     bool prefilter_reject = (model_v > 2000 && shape_v > 800);
     if (prefilter_reject) {
-        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] PMP::corefine call #" << seq_num
+        BOOST_LOG_TRIVIAL(error) << "PMP::corefine call #" << seq_num
                                  << " REJECTED pre-flight (model_v=" << model_v
                                  << ", shape_v=" << shape_v
                                  << ") -- input too large for safe Epeck corefine; marking cut invalid";
@@ -1546,7 +1544,7 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
         [&]() { corefine_overflow = true; });
 
     if (corefine_overflow) {
-        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] PMP::corefine call #" << seq_num
+        BOOST_LOG_TRIVIAL(error) << "PMP::corefine call #" << seq_num
                                  << " stack-overflow caught at tight guard; marking cut invalid";
         is_valid = false;
     } else {

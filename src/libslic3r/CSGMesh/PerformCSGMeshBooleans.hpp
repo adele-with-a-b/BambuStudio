@@ -57,7 +57,7 @@ MeshBoolean::cgal::CGALMeshPtr get_cgalmesh(const CSGPartT &csgpart)
         },
         [&]{ hw_fail = true; });
     if (hw_fail) {
-        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] csg::get_cgalmesh: CGAL Epeck stack overflow caught -- returning null mesh";
+        BOOST_LOG_TRIVIAL(error) << "csg::get_cgalmesh: CGAL Epeck stack overflow caught -- returning null mesh";
         ret = nullptr;
     }
 
