@@ -5,9 +5,6 @@
 #include <unordered_set>
 
 #include "WallToolPaths.hpp"
-#include <unistd.h>
-#include <cstdio>
-#include <sys/stat.h>
 
 #include "SkeletalTrapezoidation.hpp"
 #include "../ClipperUtils.hpp"
@@ -443,34 +440,6 @@ void removeColinearEdges(Polygons &thiss, const double max_deviation_angle = 0.0
 
 const std::vector<VariableWidthLines> &WallToolPaths::generate()
 {
-    // INVESTIGATION (fix/lan-stale-mqtt-and-wake): dump every distinct outline
-    // fed to Arachne to /tmp/arachne_dumps/ (write-once per content hash, so no
-    // spam). When the boldness-slider auto-slice crashes in Voronoi/Epeck, the
-    // LAST-written dump is the offending outline -> replay it offline. Remove
-    // before merge.
-    {
-        size_t h = 1469598103934665603ULL;
-        for (const Polygon &p : outline) for (const Point &pt : p.points) {
-            h ^= (size_t) pt.x(); h *= 1099511628211ULL;
-            h ^= (size_t) pt.y(); h *= 1099511628211ULL;
-        }
-        char path[256];
-        std::snprintf(path, sizeof(path), "/tmp/arachne_dumps/%016zx.txt", h);
-        if (::access("/tmp/arachne_dumps", 0) != 0) ::mkdir("/tmp/arachne_dumps", 0755);
-        if (::access(path, 0) != 0) {
-            if (FILE *f = std::fopen(path, "w")) {
-                std::fprintf(f, "# Arachne outline: %zu polygons, bw0=%d insets=%zu\n",
-                             outline.size(), (int) bead_width_0, (size_t) inset_count);
-                for (const Polygon &p : outline) {
-                    std::fprintf(f, "POLY %zu\n", p.points.size());
-                    for (const Point &pt : p.points) std::fprintf(f, "%lld %lld\n",
-                        (long long) pt.x(), (long long) pt.y());
-                }
-                std::fclose(f);
-            }
-        }
-    }
-
     if (this->inset_count < 1)
         return toolpaths;
 
