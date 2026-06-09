@@ -30,6 +30,20 @@ const double ASCENT_CENTER = 1/2.5; // 0.5 is above small letter
 static constexpr double SHAPE_SCALE = 0.001; // SCALING_FACTOR promile is fine enough
 static unsigned MAX_HEAL_ITERATION_OF_TEXT = 10;
 
+// Bbox-relative vertex snap grid used in heal_polygons to tame near-degenerate
+// glyph geometry that overloads CGAL Epeck exact-rational corefine (cut_surface)
+// and triggers a GMP stack-overflow (SIGBUS in __gmpz_gcd).
+// The grid self-calibrates from the glyph's own measured bounding box so it is
+// correct across all fonts regardless of unitsPerEm.
+// 0.05% of glyph bbox; physically <10um at any FDM print size, invisible vs a
+// 0.2mm nozzle, but coarse enough to merge near-degenerate vertices that
+// overload CGAL Epeck corefine. EMPIRICAL - may need tuning against the
+// skull U+2620 reproducer.
+static constexpr double GLYPH_SNAP_FRACTION = 5e-4;
+// Must exceed CleanPolygons' sqrt(2)~=1.415 so the snap actually coarsens past
+// existing cleaning.
+static constexpr coord_t GLYPH_SNAP_MIN_GRID = 4;
+
 using namespace Slic3r;
 using namespace Emboss;
 using fontinfo_opt = std::optional<stbtt_fontinfo>;
@@ -96,6 +110,12 @@ ExPolygon create_bounding_rect(const ExPolygons &shape);
 
 // Heal duplicates points and self intersections
 bool heal_dupl_inter(ExPolygons &shape, unsigned max_iteration);
+
+// Snap every vertex of res to a bbox-relative integer grid so near-coincident
+// vertices merge, taming the geometry that overloads CGAL Epeck corefine.
+// Mutates res in place ONLY if the snap passes the thin-stroke area safeguard;
+// otherwise res is left untouched (today's behavior).
+void snap_expolygons_to_grid(ExPolygons &res, ClipperLib::PolyFillType fill_type);
 
 const Points pts_2x2({Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 1)});
 const Points pts_3x3({Point(-1, -1), Point(1, -1), Point(1, 1), Point(-1, 1)});
@@ -404,6 +424,71 @@ bool Emboss::divide_segments_for_close_point(ExPolygons &expolygons, double dist
     return true;
 }
 
+namespace {
+void snap_expolygons_to_grid(ExPolygons &res, ClipperLib::PolyFillType fill_type)
+{
+    if (res.empty())
+        return;
+
+    // 1. Self-calibrate the grid from the glyph's own measured bounding box.
+    BoundingBox bb = get_extents(res);
+    // 2. Largest bbox dimension drives the grid size.
+    coord_t max_dim = std::max(bb.size().x(), bb.size().y());
+    // 3. Grid is a fraction of the bbox, floored at GLYPH_SNAP_MIN_GRID.
+    coord_t grid = std::max<coord_t>(
+        static_cast<coord_t>(std::lround(double(max_dim) * GLYPH_SNAP_FRACTION)),
+        GLYPH_SNAP_MIN_GRID);
+
+    // Area before snap (used by the thin-stroke safeguard).
+    double area_before = 0.;
+    for (const ExPolygon &ex : res)
+        area_before += ex.area();
+
+    // 4. Snap every point of every contour and hole to the grid with
+    //    sign-aware rounding (integer division truncates toward zero).
+    auto snap_point = [grid](Point &p) {
+        p.x() = ((p.x() >= 0) ? ((p.x() + grid / 2) / grid)
+                              : ((p.x() - grid / 2) / grid)) * grid;
+        p.y() = ((p.y() >= 0) ? ((p.y() + grid / 2) / grid)
+                              : ((p.y() - grid / 2) / grid)) * grid;
+    };
+
+    ExPolygons snapped = res; // operate on a copy so we can fall back
+    for (ExPolygon &ex : snapped) {
+        for (Point &p : ex.contour.points)
+            snap_point(p);
+        for (Polygon &hole : ex.holes)
+            for (Point &p : hole.points)
+                snap_point(p);
+
+        // 5. Collapse coincident consecutive points; drop rings that fall
+        //    below 3 points.
+        ex.contour.remove_duplicate_points();
+        for (Polygon &hole : ex.holes)
+            hole.remove_duplicate_points();
+        ex.holes.erase(std::remove_if(ex.holes.begin(), ex.holes.end(),
+                           [](const Polygon &h) { return h.size() < 3; }),
+            ex.holes.end());
+    }
+    snapped.erase(std::remove_if(snapped.begin(), snapped.end(),
+                      [](const ExPolygon &ex) { return ex.contour.size() < 3; }),
+        snapped.end());
+
+    // 6. Re-merge topology so collapsed edges merge cleanly.
+    ExPolygons merged = Slic3r::union_ex(to_polygons(snapped), fill_type);
+
+    // 7. Thin-stroke safeguard: if snapping ate more than half the area (or
+    //    emptied the shape) discard it and keep the un-snapped res.
+    double area_after = 0.;
+    for (const ExPolygon &ex : merged)
+        area_after += ex.area();
+    if (merged.empty() || area_after < 0.5 * area_before)
+        return; // keep original res
+
+    res = std::move(merged);
+}
+} // namespace
+
 HealedExPolygons Emboss::heal_polygons(const Polygons &shape, bool is_non_zero, unsigned int max_iteration)
 {
     const double clean_distance = 1.415; // little grater than sqrt(2)
@@ -434,6 +519,7 @@ HealedExPolygons Emboss::heal_polygons(const Polygons &shape, bool is_non_zero, 
         }
     }
     ExPolygons res = Slic3r::union_ex(polygons, fill_type);
+    snap_expolygons_to_grid(res, fill_type);
     bool is_healed = heal_expolygons(res, max_iteration);
     return {res, is_healed};
 }
@@ -797,7 +883,11 @@ const Glyph* get_glyph(
     if (!glyph.shape.empty()) {
         if (font_prop.boldness.has_value()) {
             float delta = static_cast<float>(*font_prop.boldness / SHAPE_SCALE / font_prop.size_in_mm);
-            glyph.shape = Slic3r::union_ex(offset_ex(glyph.shape, delta));
+            // offset_ex can introduce fresh near-coincident vertices / self
+            // intersections on intricate glyphs; re-heal through the same
+            // pipeline (incl. the bbox-relative snap) instead of only union_ex.
+            ExPolygons offset_shape = Slic3r::union_ex(offset_ex(glyph.shape, delta));
+            glyph.shape = Emboss::heal_polygons(to_polygons(offset_shape), true, 10).expolygons;
         }
         if (font_prop.skew.has_value()) {
             double ratio = *font_prop.skew;

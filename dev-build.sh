@@ -166,13 +166,28 @@ done
 # Team IDs"). Hardened Runtime's main purpose is notarization, which we
 # don't need for a local dev build, so we leave it off.
 SIGN_IDENTITY="14F9F6CEB1DC42167435386D87623D555E50DAEE"
+# INVESTIGATION (fix/lan-stale-mqtt-and-wake): sign with a debug entitlement
+# carrying get-task-allow + disable-library-validation so the dev build is
+# core-dumpable (ulimit -c) and lldb-attachable WITHOUT hardened runtime. This
+# makes crash post-mortems possible without re-signing by hand after each build.
+# Remove this entitlement file usage before merging to a release build.
+DEBUG_ENTS="$(mktemp /tmp/bbs_debug_ents.XXXXXX.plist)"
+cat > "$DEBUG_ENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.get-task-allow</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
+PLIST
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
-    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
-    echo "  codesign: signed with BambuStudioDev identity"
+    codesign --force --deep --entitlements "$DEBUG_ENTS" --sign "$SIGN_IDENTITY" "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
+    echo "  codesign: signed with BambuStudioDev identity (+ debug entitlement, core-dumpable)"
 else
     echo "  codesign: BambuStudioDev cert not found, falling back to ad-hoc (TCC grants will reset on each build)"
-    codesign --force --deep --sign - "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
+    codesign --force --deep --entitlements "$DEBUG_ENTS" --sign - "$APP_DST" 2>&1 | sed 's/^/  codesign: /'
 fi
+rm -f "$DEBUG_ENTS"
 
 echo ""
 echo "✅ Installed: $APP_DST"

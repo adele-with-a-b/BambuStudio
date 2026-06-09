@@ -1,3 +1,8 @@
+#include <cstring>
+#include <cstdio>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pthread.h>          // pthread_self() for breadcrumb thread-id logging
 #include "CutSurface.hpp"
 
 /// models_input.obj - Check transormation of model to each others
@@ -35,6 +40,9 @@ using namespace Slic3r;
 #include "TriangleMesh.hpp" // its_merge
 #include "Utils.hpp" // next_highest_power_of_2
 #include "ClipperUtils.hpp" // union_ex + offset_ex
+#include "Exception.hpp"   // HardCrash
+#include "TryCatchSignal.hpp"
+#include <boost/log/trivial.hpp> // EMBOSS-RECOVERY instrumentation (temporary)
 
 namespace priv {
 
@@ -531,6 +539,26 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     assert(!shapes.empty());
     if (models.empty() || shapes.empty() ) return {};
 
+    // The entire CGAL cut pipeline below runs under a signal guard.
+    // corefine, the post-corefine face-type/flood-fill work, diff_models
+    // (which calls CGAL clip), calc_distances and select_patches all run
+    // CGAL Epeck (exact rational) predicates. On near-degenerate input
+    // (very fine glyph paths, near-coplanar surfaces under the embossed
+    // text -- e.g. detailed emoji glyphs at small sizes) the Lazy_exact_nt
+    // DAG walk plus GMP's mpn_hgcd recursion can overflow the worker
+    // thread stack. Bumping the stack only moves the threshold; the
+    // robust fix is to catch the resulting SIGSEGV/SIGBUS/SIGFPE and
+    // surface a non-fatal "couldn't apply text to surface" error to the
+    // user (see EmbossJob.cpp) rather than taking down the whole app.
+    // The guard wraps the WHOLE pipeline, not just corefine, because the
+    // overflow has been observed downstream of corefine (in the
+    // post-corefine Epeck work) as well as in corefine itself.
+    SurfaceCut result;
+    bool       cut_hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] cut_surface: entering signal-guarded region";
+    try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+
 #ifdef DEBUG_OUTPUT_DIR
     priv::initialize_store(DEBUG_OUTPUT_DIR);
     priv::store(models, DEBUG_OUTPUT_DIR + "models_input.obj");
@@ -585,10 +613,11 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     }
 
     priv::SurfacePatches patches = priv::diff_models(model_cuts, cgal_models, cgal_neg_models, projection);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: diff_models returned, patches=" << patches.size();
 #ifdef DEBUG_OUTPUT_DIR
     priv::store(patches, DEBUG_OUTPUT_DIR + "patches/");
 #endif // DEBUG_OUTPUT_DIR
-    if (patches.empty()) return {};
+    if (patches.empty()) return; // empty cut -> outer `result` stays empty
 
     // fix - convert shape_point_id to expolygon index
     // save 1 param(s2i) from diff_models call
@@ -599,20 +628,36 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     // it is used for distiguish the top one
     uint32_t shapes_points = s2i.get_count();
     // for each point collect all projection distances
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: calc_distances enter (shapes_points=" << shapes_points << ", patches=" << patches.size() << ")";
     priv::VDistances distances = priv::calc_distances(patches, cgal_models, cgal_shape, shapes_points, projection_ratio);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: calc_distances exit";
 
     Point start = shapes_bb.center(); // only align center
 
     // Use only outline points
     // for each point select best projection
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: choose_best_distance enter";
     priv::ProjectionDistances best_projection = priv::choose_best_distance(distances, shapes, start, s2i, patches);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: choose_best_distance exit; select_patches enter";
     std::vector<bool> use_patch = priv::select_patches(best_projection, patches, shapes, shapes_bb, s2i, model_cuts, cgal_models, projection);
-    SurfaceCut result = merge_patches(patches, use_patch);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: select_patches exit; merge_patches enter";
+    result = merge_patches(patches, use_patch);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: merge_patches exit";
     //*/
 
 #ifdef DEBUG_OUTPUT_DIR
     priv::store(result, DEBUG_OUTPUT_DIR + "result.obj", DEBUG_OUTPUT_DIR + "result_contours/");
 #endif // DEBUG_OUTPUT_DIR
+
+        }, // end of signal-guarded fn()
+        [&]() { cut_hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] cut_surface: exited signal-guarded region, hw_fail=" << cut_hw_fail;
+
+    if (cut_hw_fail) {
+        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] cut_surface stack overflow caught -- recovering as HardCrash";
+        throw Slic3r::HardCrash("CGAL surface cut crashed (likely stack overflow on near-degenerate input).");
+    }
+
     return result;
 }
 
@@ -1419,7 +1464,111 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
                         .edge_is_constrained_map(ecm)
                         .throw_on_self_intersection(false);
     const auto& q = CGAL::parameters::do_not_modify(true);
-    CGAL::Polygon_mesh_processing::corefine(cgal_model, cgal_shape, p, q);
+    // NOTE: the SIGBUS/SIGSEGV/SIGFPE stack-overflow guard for the CGAL
+    // Epeck arithmetic is NOT here -- it wraps the whole cut_surface()
+    // pipeline (corefine + set_face_type + diff_models/clip +
+    // calc_distances), because the overflow can surface at any of those
+    // Epeck-heavy steps, not just corefine. See Slic3r::cut_surface.
+    // INVESTIGATION (fix/lan-stale-mqtt-and-wake): dump every corefine input
+    // pair to /tmp/corefine_dumps/seq_NNN_{model,shape}.off with a monotonic
+    // per-thread sequence number. After each call, write a sibling marker file
+    // seq_NNN.survived. The pair WITHOUT a .survived marker is the one whose
+    // corefine never returned -- i.e. THE crashing call, with its exact inputs.
+    // We also log call count + thread id so the trail correlates uniquely.
+    static thread_local int s_corefine_seq = 0;
+    int seq_num = ++s_corefine_seq;
+    char dirpath[64]; std::snprintf(dirpath, sizeof(dirpath), "/tmp/corefine_dumps");
+    ::mkdir(dirpath, 0755); // ignore EEXIST
+    char model_path[160], shape_path[160], survived_path[160];
+    unsigned long tid = (unsigned long)(uintptr_t)pthread_self();
+    std::snprintf(model_path, sizeof(model_path),
+                  "/tmp/corefine_dumps/seq_%04d_tid_%lx_model.off", seq_num, tid);
+    std::snprintf(shape_path, sizeof(shape_path),
+                  "/tmp/corefine_dumps/seq_%04d_tid_%lx_shape.off", seq_num, tid);
+    std::snprintf(survived_path, sizeof(survived_path),
+                  "/tmp/corefine_dumps/seq_%04d_tid_%lx.survived", seq_num, tid);
+    CGAL::IO::write_OFF(model_path, cgal_model);
+    CGAL::IO::write_OFF(shape_path, cgal_shape);
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] corefine call #" << seq_num
+                            << " (tid=" << std::hex << tid << std::dec
+                            << ") model_v=" << cgal_model.number_of_vertices()
+                            << " shape_v=" << cgal_shape.number_of_vertices()
+                            << " dumped to " << model_path;
+
+    // PRE-FLIGHT GUARD: reject inputs that are anomalously large for emboss-text
+    // corefine. Empirically (test_corefine_replay seq_0030 reproducer) at
+    // model_v >= 2000 + shape_v >= 1000 the CGAL Epeck recursion blows the 4 MB
+    // worker stack faster than the signal handler can recover. Typical emboss
+    // text-on-surface inputs have ~300-500 vert models and ~100-1000 vert shapes;
+    // the >>2000 vert case happens when the source surface is high-poly (or
+    // unusually subdivided) AND the glyph is intricate (high-vertex emoji).
+    // Rejecting these up-front avoids the racy signal-delivery failure mode and
+    // surfaces "couldn't apply text" instead of a hard crash. The thresholds
+    // are conservative and won't reject anything close to typical use.
+    const size_t model_v = cgal_model.number_of_vertices();
+    const size_t shape_v = cgal_shape.number_of_vertices();
+    bool prefilter_reject = (model_v > 2000 && shape_v > 800);
+    if (prefilter_reject) {
+        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] PMP::corefine call #" << seq_num
+                                 << " REJECTED pre-flight (model_v=" << model_v
+                                 << ", shape_v=" << shape_v
+                                 << ") -- input too large for safe Epeck corefine; marking cut invalid";
+        is_valid = false;
+        return {};
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] PMP::corefine entry (call #" << seq_num << ")";
+    // Tight inner signal guard around corefine ONLY.
+    //
+    // Removed (2026-06-05): the wall-clock watchdog that fired
+    // pthread_kill(SIGBUS) at the worker after a 20s deadline. Two reasons:
+    //
+    // 1. The original premise -- "corefine can enter non-terminating
+    //    computation on degenerate input" -- did not survive measurement.
+    //    Researcher stress (30 invocations of every dump in
+    //    /tmp/corefine_dumps/, identical binary) showed the crash rate is
+    //    ~3-13% per invocation across the WHOLE pool, with no input-only
+    //    discriminator. The mechanism is GMP exact-rational recursion that
+    //    grows the stack to within a few KB of the available headroom; ASLR
+    //    + dyld load order shifts the layout enough between launches to flip
+    //    whether the recursion fits. It's a stack-layout race, not a hung
+    //    computation, so a 20s deadline never approaches the actual failure
+    //    mode (the production crash dies in ~80 ms inside __gmpn_mul_1).
+    //
+    // 2. The Apple kernel attribution on the 2026-06-05 10:52:48 crash --
+    //    "Bad access in stack guard region for thread 44 but crash was
+    //    associated with thread 43 -- possible stray access?" -- points
+    //    squarely at watchdog-induced stack tearing. pthread_kill(SIGBUS)
+    //    delivered to a thread mid-recursion through GMP / Epeck makes the
+    //    handler run on the alt stack and siglongjmp back, but the
+    //    in-flight return-address chain on the worker stack has already
+    //    been written through by the recursion. The longjmp lands in
+    //    garbage. So the watchdog plausibly CAUSED the irrecoverable case
+    //    rather than recovering from it.
+    //
+    // The structural fix lives in CutSurfaceHelper.cpp -- run cut_surface()
+    // in a forked subprocess so the parent never sees the stack-stomp. The
+    // tight inner guard here is kept as defence in depth for the in-process
+    // path (e.g. callers that bypass cut_surface_via_helper, or platforms
+    // where forking isn't available).
+    bool corefine_overflow = false;
+    try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            CGAL::Polygon_mesh_processing::corefine(cgal_model, cgal_shape, p, q);
+        },
+        [&]() { corefine_overflow = true; });
+
+    if (corefine_overflow) {
+        BOOST_LOG_TRIVIAL(error) << "[EMBOSS-RECOVERY] PMP::corefine call #" << seq_num
+                                 << " stack-overflow caught at tight guard; marking cut invalid";
+        is_valid = false;
+    } else {
+        if (FILE *mf = std::fopen(survived_path, "w")) {
+            std::fprintf(mf, "ok\n"); std::fclose(mf);
+        }
+    }
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] PMP::corefine call #" << seq_num
+                            << " returned (overflow=" << corefine_overflow << ")";
 
     if (!is_valid) return {};
 
@@ -2558,6 +2707,7 @@ void priv::create_face_types(FaceTypeMap           &map,
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
 bool priv::clip_cut(SurfacePatch &cut, CutMesh clipper)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] priv::clip_cut entry (CGAL PMP::clip)";
     CutMesh& tm = cut.mesh;
     // create backup for case that there is no intersection
     CutMesh backup_copy = tm;
@@ -3033,6 +3183,7 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
                                        /*const*/ CutMeshes &models,
                                        const Project3d     &projection)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] priv::diff_models entry";
     // IMPROVE: when models contain ONE mesh. It is only about convert cuts to patches
     // and reduce unneccessary triangles on contour
 
@@ -3059,38 +3210,50 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
         create_reduce_map(vertex_reduction_map, cut_model);
 
         for (size_t cut_index = 0; cut_index < model_cuts.size(); ++cut_index, ++index) {
+            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models loop m=" << model_index << " c=" << cut_index;
             const CutAOI &cut = model_cuts[cut_index];
             SurfacePatchEx patch_ex;
             SurfacePatch  &patch = patch_ex.patch;
+            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: create_surface_patch enter";
             patch = create_surface_patch(cut.first, cut_model_, &vertex_reduction_map);
+            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: create_surface_patch exit";
             patch.bb = bbs[index];
             patch.aoi_id   = cut_index;
             patch.model_id = model_index;
             patch.shape_id = get_shape_point_index(cut, cut_model);
             patch.is_whole_aoi = true;
 
+            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: aoi_patches clear+push (CGAL Surface_mesh copy)";
             aoi_patches.clear();
             aoi_patches.push_back(patch_ex);
+            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: aoi_patches done, entering inner model loop n_models=" << models.size();
             for (size_t model_index2 = 0; model_index2 < models.size(); ++model_index2) {
                 // do not clip source model itself
                 if (model_index == model_index2) continue;
+                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: inner loop m2=" << model_index2;
                 for (SurfacePatchEx &patch_ex : aoi_patches) {
                     SurfacePatch &patch = patch_ex.patch;
-                    if (has_bb_intersection(patch.bb, model_index2, bbs, m2i) &&
-                        clip_cut(patch, models[model_index2])){
+                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: has_bb_intersection check";
+                    bool bb_hit = has_bb_intersection(patch.bb, model_index2, bbs, m2i);
+                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: has_bb_intersection=" << bb_hit;
+                    if (bb_hit && clip_cut(patch, models[model_index2])){
                         patch_ex.just_cliped = true;
                     } else {
                         // build tree on demand
                         // NOTE: it is possible not neccessary: e.g. one model
                         Tree &tree = trees[model_index2];
                         if (tree.empty()) {
+                            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: AABB tree.build enter for model_index2=" << model_index2;
                             const CutMesh &model   = models[model_index2];
                             auto           f_range = faces(model);
                             tree.insert(f_range.first, f_range.second, model);
                             tree.build();
+                            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: AABB tree.build exit";
                         }
+                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: is_patch_inside_of_model enter";
                         if (is_patch_inside_of_model(patch, tree, projection))
                             patch_ex.full_inside = true;
+                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: is_patch_inside_of_model exit";
                     }
                 }
                 // erase full inside

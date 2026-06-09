@@ -134,6 +134,7 @@ template<class _Mesh> void triangle_mesh_to_cgal(const TriangleMesh& M, _Mesh& o
     using Index3 = std::array<size_t, 3>;
 
     if (M.empty()) return;
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] triangle_mesh_to_cgal(TriangleMesh) entry verts=" << M.its.vertices.size() << " tris=" << M.its.indices.size();
 
     std::vector<typename _Mesh::Point> points;
     std::vector<Index3> indices;
@@ -164,6 +165,7 @@ void triangle_mesh_to_cgal(const std::vector<stl_vertex> &                 V,
                            _Mesh &out)
 {
     if (F.empty()) return;
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] triangle_mesh_to_cgal(stl_vertex) entry verts=" << V.size() << " tris=" << F.size();
 
     size_t vertices_count = V.size();
     size_t edges_count    = (F.size()* 3) / 2;
@@ -273,11 +275,18 @@ static bool _cgal_intersection(CGALMesh &A, CGALMesh &B, CGALMesh &R)
 
 template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] _cgal_do entry (corefine boolean)";
     bool success = false;
     bool hw_fail = false;
     try {
         CGALMesh result;
-        try_catch_signal({SIGSEGV, SIGFPE}, [&success, &A, &B, &result, &op] {
+        // SIGBUS included alongside SIGSEGV/SIGFPE: on macOS a stack
+        // overflow in CGAL's exact-arithmetic recursion is delivered as
+        // SIGBUS (fault at the stack guard page), not SIGSEGV. Without
+        // SIGBUS here the boolean guard silently fails to catch the most
+        // common real-world crash on macOS. (POSIX try_catch_signal was
+        // a no-op stub until recently, so this gap was latent.)
+        try_catch_signal({SIGSEGV, SIGFPE, SIGBUS}, [&success, &A, &B, &result, &op] {
             success = op(A, B, result);
         }, [&] { hw_fail = true; });
         A = std::move(result);      // In-place operation does not work
@@ -295,7 +304,10 @@ template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
 void minus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_diff, A, B); }
 void plus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_union, A, B); }
 void intersect(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_intersection, A, B); }
-bool does_self_intersect(const CGALMesh &mesh) { return CGALProc::does_self_intersect(mesh.m); }
+bool does_self_intersect(const CGALMesh &mesh) {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_self_intersect(CGALMesh) entry";
+    return CGALProc::does_self_intersect(mesh.m);
+}
 // BBS
 void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha = 0.5, int segment_number=5)
 {
@@ -458,6 +470,7 @@ void intersect(indexed_triangle_set &A, const indexed_triangle_set &B)
 
 bool does_self_intersect(const TriangleMesh &mesh)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_self_intersect(TriangleMesh) entry verts=" << mesh.its.vertices.size();
     CGALMesh cgalm;
     triangle_mesh_to_cgal(mesh.its.vertices, mesh.its.indices, cgalm.m);
     return CGALProc::does_self_intersect(cgalm.m);
@@ -467,6 +480,7 @@ void CGALMeshDeleter::operator()(CGALMesh *ptr) { delete ptr; }
 
 bool does_bound_a_volume(const CGALMesh &mesh)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_bound_a_volume(CGALMesh) entry";
     return CGAL::is_closed(mesh.m) && CGALProc::does_bound_a_volume(mesh.m);
 }
 

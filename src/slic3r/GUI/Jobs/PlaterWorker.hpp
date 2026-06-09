@@ -90,7 +90,15 @@ class PlaterWorker: public Worker {
             if (eptr) try {
                 std::rethrow_exception(eptr);
             }  catch (std::exception &e) {
-                show_error(m_plater, _L("An unexpected error occured") + ": " + e.what());
+                // Note: the JobException class is used for RECOVERABLE,
+                // expected failure modes (empty input, font with no glyph,
+                // surface-cut returned empty, helper subprocess died on
+                // GMP stack-stomp, etc.). The "An unexpected error
+                // occurred" prefix mis-frames these as catastrophic. We
+                // keep the prefix for now -- a finer-grained split (e.g.
+                // distinct toast for JobException vs. genuine std::exception)
+                // is a follow-up. Spelling fix: "occured" -> "occurred".
+                show_error(m_plater, _L("An unexpected error occurred") + ": " + e.what());
                 eptr = nullptr;
             }
         }

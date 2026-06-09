@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "ClipperUtils.hpp"
 #include "Model.hpp"
 #include "Print.hpp"
@@ -897,6 +898,48 @@ void update_volume_bboxes(
     const Transform3d                                   &object_trafo,
     const float                                          offset)
 {
+    // Defensive: a null ModelVolume* must never reach the dereferences below
+    // (model_volume_solid_or_modifier(*model_volume) etc.). A null can slip into
+    // an object's volume list via a partially-failed volume-creation path (e.g.
+    // an emboss job whose per-glyph mesh step recovered from a CGAL/GMP overflow
+    // and left a slot unfilled). Strip nulls here so apply() can't crash on them.
+    // model_volumes is passed by value, so erasing is local and safe.
+    //
+    // Also strip volumes with a null m_mesh shared_ptr. ModelVolume::mesh()
+    // does `*m_mesh.get()` -- if m_mesh is null, that's UB and crashes inside
+    // transformed_its_bbox2d at line ~925. This shape was observed in the
+    // 2026-06-06 14:13:24 crash report (frame: update_volume_bboxes ->
+    // KERN_INVALID_ADDRESS at 0x0): an emboss "Modify Text" snapshot/apply
+    // path committed an in-flight ModelVolume mutation before the worker
+    // job that fills the mesh actually ran; the worker then threw a
+    // recoverable JobException (helper-subprocess returned empty cut), the
+    // model retained the mutation, and the next slicing-prep tried to bbox
+    // it. We can't fix the root-cause (the gizmo's pre-job mutation) from
+    // here -- this defensive strip is a guard, not a cure. The real fix is
+    // either rolling back the snapshot when the job fails, or only taking
+    // the snapshot at job-success.
+    // The predicate strips THREE bad shapes:
+    //   1. null ModelVolume*            -- unfilled slot from a failed creation
+    //   2. null m_mesh shared_ptr       -- mesh() does *m_mesh.get(), UB if null
+    //   3. valid mesh with EMPTY its    -- THIS is the one the 2026-06-06 crash
+    //                                      actually hit. transformed_its_bbox2d
+    //                                      does its.indices.front() with the
+    //                                      bounds assert compiled out in release,
+    //                                      so an empty indices vector reads from
+    //                                      a null data pointer -> SIGSEGV at 0x0.
+    // Shape 3 was MISSED by the first version of this guard (which only checked
+    // mesh_ptr()==nullptr). The root-cause fix lives upstream in EmbossJob.cpp
+    // (recreate_model_volume / create_text_volume / GenerateTextJob::finalize
+    // now refuse to commit empty meshes); this strip is defence-in-depth so a
+    // future empty-volume insertion from any path can't crash slicing-prep.
+    model_volumes.erase(std::remove_if(model_volumes.begin(), model_volumes.end(),
+        [](const ModelVolume *mv) {
+            return mv == nullptr
+                || mv->mesh_ptr() == nullptr
+                || mv->mesh().its.indices.empty();
+        }),
+        model_volumes.end());
+
     // output will be sorted by the order of model_volumes sorted by their ObjectIDs.
     model_volumes_sort_by_id(model_volumes);
 
@@ -1005,7 +1048,19 @@ static PrintObjectRegions* generate_print_object_regions(
             layer_ranges_regions.push_back({ range.layer_height_range, range.config });
     }
 
-    const bool is_mm_painted = num_extruders > 1 && std::any_of(model_volumes.cbegin(), model_volumes.cend(), [](const ModelVolume *mv) { return mv->is_mm_painted(); });
+    // Defensive null + null-mesh skip in the lambda for the same reasons as
+    // update_volume_bboxes() above: a partially-failed emboss-volume creation
+    // path can leave a ModelVolume* that is either nullptr or has m_mesh=null
+    // in the object's volume list. is_mm_painted() dereferences mv (which
+    // would be a null deref) and indirectly touches mesh state. The
+    // surrounding update_volume_bboxes already strips both shapes, but this
+    // lambda runs BEFORE that strip on the same vector, so the strip is too
+    // late. Skip here to match the strip's behaviour.
+    const bool is_mm_painted = num_extruders > 1 && std::any_of(model_volumes.cbegin(), model_volumes.cend(), [](const ModelVolume *mv) {
+        if (mv == nullptr || mv->mesh_ptr() == nullptr || mv->mesh().its.indices.empty())
+            return false;
+        return mv->is_mm_painted();
+    });
     update_volume_bboxes(layer_ranges_regions, out->cached_volume_ids, model_volumes, out->trafo_bboxes, is_mm_painted ? 0.f : std::max(0.f, xy_contour_compensation));
 
     std::vector<PrintRegion*> region_set;

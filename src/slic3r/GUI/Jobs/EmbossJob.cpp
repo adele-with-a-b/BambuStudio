@@ -8,18 +8,21 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Format/OBJ.hpp> // load_obj for default mesh
 #include <libslic3r/CutSurface.hpp> // use surface cuts
+#include <libslic3r/CutSurfaceHelper.hpp> // cut_surface_via_helper -- subprocess isolation for the CGAL/GMP stack-stomp class of crashes
 #include <libslic3r/BuildVolume.hpp> // create object
 #include <libslic3r/SLA/ReprojectPointsOnMesh.hpp>
+#include <libslic3r/Exception.hpp> // HardCrash from CutSurface signal recovery
+#include <libslic3r/TryCatchSignal.hpp> // signal guard for emboss mesh-gen recovery
 
 #include "libslic3r/libslic3r.h"
 #include "slic3r/GUI/Plater.hpp"
-////#include "slic3r/GUI/NotificationManager.hpp"
+#include "slic3r/GUI/NotificationManager.hpp" // recoverable JobException -> non-blocking toast
+#include "slic3r/GUI/GUI_App.hpp"              // wxGetApp().plater()->get_notification_manager()
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/SurfaceDrag.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 //#include "slic3r/GUI/MainFrame.hpp"
 //#include "slic3r/GUI/GUI.hpp"
-//#include "slic3r/GUI/GUI_App.hpp"
 //#include "slic3r/GUI/Gizmos/GLGizmoEmboss.hpp"
 #include "slic3r/GUI/Selection.hpp"
 #include "slic3r/GUI/CameraUtils.hpp"
@@ -63,12 +66,68 @@ bool _finalize(bool canceled, std::exception_ptr &eptr, const DataBase &input)
     return !exception_process(eptr);
 }
 
+// Recoverable-exception UI policy.
+//
+// JobException is, by construction, the type used by the emboss workers to
+// report RECOVERABLE, user-actionable failures with localized messages
+// (e.g. "Couldn't apply text to surface...", "Font doesn't have any shape
+// for given text", "There is no valid surface for text projection",
+// CutSurfaceHelper subprocess died on a CGAL/GMP stack-stomp). These can
+// fire many times during a single slider drag while the user explores
+// configurations, so blocking the UI on a modal that demands dismissal
+// is the wrong shape: the user is mid-gesture, the failure is recoverable
+// without input, the next frame may succeed.
+//
+// Previously: this site called create_message(e.what()) -> show_error(),
+// a wxMessageDialog modal that BLOCKS the UI thread until clicked. With
+// the helper-subprocess wrapper now isolating the crash class, the
+// previously-RARE failure became the common-recoverable failure, and the
+// modal punished users for using emoji glyphs.
+//
+// Now: route to NotificationManager as a CustomNotification at
+// RegularNotificationLevel. RegularNotificationLevel auto-fades after
+// 10s and stacks visually with prior notifications without blocking
+// input. ErrorNotificationLevel never fades and stays loud; reserved for
+// genuinely-stuck states that the user must address. A recoverable
+// surface-cut failure is the former category, not the latter.
+//
+// Genuinely-unexpected exceptions (programmer bugs, OOM, std::exception
+// types we did not throw ourselves) are NOT caught here and propagate up
+// to PlaterWorker::PlaterJob::finalize, which still shows a modal with
+// the "An unexpected error occurred" prefix -- correct behaviour for the
+// genuinely-unexpected case.
 bool exception_process(std::exception_ptr &eptr)
 {
     if (!eptr) return false;
     try {
         std::rethrow_exception(eptr);
     } catch (JobException &e) {
+        // Defensive: if for any reason the notification manager isn't
+        // reachable yet (e.g. very early shutdown teardown, headless test),
+        // fall back to the modal so the user/operator still sees the
+        // message rather than swallowing it silently.
+        //
+        // Visual style: PrintInfoNotificationLevel + use_warn_color=true.
+        // RegularNotificationLevel has the same fade behaviour but renders
+        // in a green/success palette (verified empirically: user reported
+        // "popup is now a green message not a warning"). We want a yellow
+        // warning hue so the user reads it as "something went wrong but
+        // it's recoverable, the slider is still usable" -- not "success!"
+        // and not the loud no-fade red Error level. The use_warn_color
+        // flag toggles the warning hue without escalating the priority
+        // class. Pattern lifted from
+        // NotificationManager::bbl_show_objectsinfo_notification (which
+        // uses the same style for non-blocking object-state warnings).
+        if (auto *plater = wxGetApp().plater()) {
+            if (auto *nm = plater->get_notification_manager()) {
+                nm->push_warning_notification(
+                    NotificationType::CustomNotification,
+                    NotificationManager::NotificationLevel::PrintInfoNotificationLevel,
+                    e.what());
+                eptr = nullptr;
+                return true;
+            }
+        }
         create_message(e.what());
         eptr = nullptr;
     }
@@ -183,8 +242,30 @@ bool is_valid(ModelVolumeType volume_type)
 }
 
 
-void recreate_model_volume(ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
+bool recreate_model_volume(ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
 {
+    // INVARIANT: never insert a ModelVolume with an empty mesh into the model.
+    // An empty its.indices means the downstream slicing-prep bbox pass
+    // (PrintApply.cpp transformed_its_bbox2d -> its.indices.front()) reads
+    // from a null vector data pointer and crashes with KERN_INVALID_ADDRESS
+    // at 0x0 (proven from the 2026-06-06 14:13:24 crash report's faulting
+    // instruction). An empty cut reaches here when the emboss surface-cut
+    // (now isolated in the helper subprocess) returns no geometry for a
+    // pathological glyph/surface combination.
+    //
+    // For the recreate (slider-edit) case the right behaviour is to KEEP the
+    // existing good volume untouched: no snapshot, no add_volume, no swap.
+    // The user is left with the last-good geometry and a toast (surfaced by
+    // GenerateTextJob::finalize -> exception_process). UpdateJob::update_volume
+    // already enforces this same non-empty invariant; the text-creation
+    // helpers historically did not.
+    if (mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "[EMBOSS-RECOVERY] recreate_model_volume: empty mesh (no indices); "
+               "keeping previous volume, not committing an empty text_shape.";
+        return false;
+    }
+
     wxGetApp() .plater()->take_snapshot("Modify Text");
 
     ModelVolume *model_volume     = model_object->volumes[volume_idx];
@@ -199,10 +280,23 @@ void recreate_model_volume(ModelObject *model_object, int volume_idx, const Tria
     model_object->delete_volume(model_object->volumes.size() - 1);
     model_object->invalidate_bounding_box();
     wxGetApp().plater()->update();
+    return true;
 }
 
-void create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
+bool create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
 {
+    // Same non-empty invariant as recreate_model_volume (see its comment).
+    // For the create (first-generate) case there is no prior volume to
+    // preserve, so we simply do not create one: the user sees a toast and
+    // no new text appears, which beats inserting an empty volume that
+    // crashes slicing-prep.
+    if (mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "[EMBOSS-RECOVERY] create_text_volume: empty mesh (no indices); "
+               "not creating an empty text_shape volume.";
+        return false;
+    }
+
     wxGetApp().plater()->take_snapshot("create_text_volume");
 
     ModelVolume *new_model_volume = model_object->add_volume(mesh, false);
@@ -219,6 +313,7 @@ void create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &m
 
     model_object->invalidate_bounding_box();
     wxGetApp().plater()->update();
+    return true;
 }
 
 bool check(unsigned char gizmo_type) { return gizmo_type == (unsigned char) GLGizmosManager::Svg; }
@@ -339,9 +434,36 @@ UpdateSurfaceVolumeJob::UpdateSurfaceVolumeJob(UpdateSurfaceVolumeData &&input) 
 
 void UpdateSurfaceVolumeJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] UpdateSurfaceVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for UseSurfaceJob.");
-    m_result = cut_surface(*m_input.base, m_input); //, was_canceled(ctl, *m_input.base)
+    // Defense-in-depth: wrap the whole body in a signal guard like every other
+    // emboss job. cut_surface() has its own inner guard around the CGAL
+    // corefine + Epeck pipeline, but if a stack overflow ever escapes that
+    // (e.g. on a worker that didn't get an alt stack at creation), this outer
+    // guard catches it and degrades to a JobException instead of a hard crash.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateSurfaceVolumeJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            try {
+                m_result = cut_surface(*m_input.base, m_input);
+            } catch (const Slic3r::HardCrash &) {
+                // CGAL surface corefine blew the worker stack on near-degenerate
+                // input -- rethrow as a JobException so the existing toast-message
+                // pipeline (_finalize -> exception_process -> create_message) shows
+                // a useful, non-fatal error to the user instead of crashing the
+                // app. See CutSurface.cpp around the corefine call for the
+                // rationale on why we treat this as recoverable.
+                throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
+                                        "shrinking it, or simplifying the surface underneath.").c_str());
+            }
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateSurfaceVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
+                                "shrinking it, or simplifying the surface underneath.").c_str());
 }
 bool UpdateSurfaceVolumeJob::is_use_surfae_error =false;
 
@@ -358,14 +480,30 @@ UpdateJob::UpdateJob(DataUpdate &&input) : m_input(std::move(input)) {}
 
 void UpdateJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] UpdateJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossUpdateJob.");
 
-    m_result = try_create_mesh(*m_input.base);
-    if (was_canceled(ctl, *m_input.base))
-        return;
-    if (m_result.its.empty())
-        throw JobException("Created text volume is empty. Change text or font.");
+    // The text/glyph mesh path (try_create_mesh -> create_mesh_per_glyph ->
+    // cut_per_glyph_surface -> cut_surface_to_its) does CGAL Epeck exact-
+    // rational work on the persistent PlaterWorker thread. Near-degenerate
+    // input can blow the worker stack inside GMP recursion (SIGBUS/SIGSEGV),
+    // which is OUTSIDE the cut_surface guard. Wrap the whole mesh-generating
+    // body so the crash degrades to a user toast instead of killing the app.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            m_result = try_create_mesh(*m_input.base);
+            if (was_canceled(ctl, *m_input.base))
+                return;
+            if (m_result.its.empty())
+                throw JobException("Created text volume is empty. Change text or font.");
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] UpdateJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
 
 void UpdateJob::finalize(bool canceled, std::exception_ptr &eptr)
@@ -411,6 +549,7 @@ void UpdateJob::update_volume(ModelVolume *volume, TriangleMesh &&mesh, const Da
 CreateObjectJob::CreateObjectJob(DataCreateObject &&input) : m_input(std::move(input)) {}
 void CreateObjectJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateObjectJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossCreateObjectJob.");
 
@@ -418,11 +557,24 @@ void CreateObjectJob::process(Ctl &ctl)
     if (m_input.base->shape.projection.use_surface) m_input.base->shape.projection.use_surface = false;
 
     // auto was_canceled = ::was_canceled(ctl, *m_input.base);
-    if (m_input.base->merge_shape || !m_input.base->text_lines.empty()) { // || m_input.base->shape.shapes_with_ids.size() > 20
-        m_result = create_mesh(*m_input.base);
-    } else {
-        m_results = create_meshs(*m_input.base);
-    }
+    // Guard the CGAL text/glyph mesh-generation (create_mesh / create_meshs ->
+    // try_create_mesh -> create_mesh_per_glyph -> cut_surface_to_its). Same
+    // worker-stack-overflow risk as UpdateJob; the downstream bed/transform
+    // math below is plain geometry and needs no guard.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            if (m_input.base->merge_shape || !m_input.base->text_lines.empty()) { // || m_input.base->shape.shapes_with_ids.size() > 20
+                m_result = create_mesh(*m_input.base);
+            } else {
+                m_results = create_meshs(*m_input.base);
+            }
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 
     // Create new object
     // calculate X,Y offset position for lay on platter in place of
@@ -484,6 +636,15 @@ void CreateObjectJob::finalize(bool canceled, std::exception_ptr &eptr)
             for (auto shape : m_input.base->shape.shapes_with_ids) {
                 if (shape.expoly.empty())
                     continue;
+                // Guard against m_results being shorter than the non-empty shape
+                // count: create_meshs() can produce fewer meshes than shapes if a
+                // per-glyph mesh step bailed (e.g. a recovered CGAL/GMP overflow).
+                // Indexing past the end (or adding an empty mesh) would leave a
+                // bad/empty ModelVolume in the object's volume list, which then
+                // null-derefs in Print::apply -> update_volume_bboxes.
+                if (index >= (int) m_results.size())
+                    break;
+                if (m_results[index].empty()) { index++; continue; }
                 ModelVolume *new_volume = new_object->add_volume(std::move(m_results[index]));
                 // set a default extruder value, since user can't add it manually
                 new_volume->config.set_key_value("extruder", new ConfigOptionInt(1));
@@ -526,9 +687,26 @@ void CreateObjectJob::finalize(bool canceled, std::exception_ptr &eptr)
 CreateSurfaceVolumeJob::CreateSurfaceVolumeJob(CreateSurfaceVolumeData &&input) : m_input(std::move(input)) {}
 void CreateSurfaceVolumeJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateSurfaceVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for CreateSurfaceVolumeJob.");
-    m_result = cut_surface(*m_input.base, m_input); // was_canceled(ctl, *m_input.base)
+    // Defense-in-depth signal guard, matching UpdateSurfaceVolumeJob's pattern.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateSurfaceVolumeJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            try {
+                m_result = cut_surface(*m_input.base, m_input);
+            } catch (const Slic3r::HardCrash &) {
+                throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
+                                        "shrinking it, or simplifying the surface underneath.").c_str());
+            }
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateSurfaceVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
+                                "shrinking it, or simplifying the surface underneath.").c_str());
 }
 void CreateSurfaceVolumeJob::finalize(bool canceled, std::exception_ptr &eptr)
 {
@@ -542,9 +720,21 @@ CreateVolumeJob::CreateVolumeJob(DataCreateVolume &&input) : m_input(std::move(i
 
 void CreateVolumeJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossCreateVolumeJob.");
-    m_result = create_mesh(*m_input.base);
+    // Guard the CGAL text/glyph mesh-generation; same worker-stack-overflow
+    // risk as UpdateJob (create_mesh -> try_create_mesh -> per-glyph cut).
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateVolumeJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            m_result = create_mesh(*m_input.base);
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateVolumeJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
 
 void CreateVolumeJob::finalize(bool canceled, std::exception_ptr &eptr)
@@ -926,8 +1116,29 @@ indexed_triangle_set cut_surface_to_its(const ExPolygons &shapes, float scale, c
         shapes_ptr = &shapes_data;
     }
 
-    // Use CGAL to cut surface from triangle mesh
-    SurfaceCut cut = Slic3r::cut_surface(*shapes_ptr, itss, cut_projection, projection_ratio);
+    // Use CGAL to cut surface from triangle mesh.
+    //
+    // We route through cut_surface_via_helper(), which forks the same
+    // BambuStudio binary in helper-process mode (--cut-surface-helper),
+    // sends the inputs via a binary IPC over fds 50/51, runs the real
+    // Slic3r::cut_surface() in there, and pipes the result back. If the
+    // helper dies by signal (the GMP/Epeck stack-stomp class of crashes),
+    // exits non-zero, or exceeds the wall-clock deadline, the wrapper
+    // returns an empty SurfaceCut and the caller below falls through the
+    // "if (cut.empty())" path to a clean "couldn't apply text" toast --
+    // exactly the same recovery surface as the in-process try_catch_signal
+    // path used to provide, but UNCONDITIONAL: a stack-stomp inside the
+    // helper cannot tear the GUI process's stack, so recovery doesn't
+    // depend on the handler being able to siglongjmp out of corrupted
+    // frames.
+    //
+    // The helper has its own internal try_catch_signal guards (defence in
+    // depth) but the top-level recovery is the OS killing the helper.
+    //
+    // Cost: per-cut spawn (a few ms) + IPC marshaling. Negligible vs the
+    // CGAL Epeck pipeline that follows.
+    SurfaceCut cut = Slic3r::cut_surface_via_helper(
+        *shapes_ptr, itss, cut_projection, projection_ratio);
 
     if (is_text_reflected) {
         for (SurfaceCut::Contour &c : cut.contours) std::reverse(c.begin(), c.end());
@@ -1393,36 +1604,111 @@ GenerateTextJob::GenerateTextJob(InputInfo &&input) : m_input(std::move(input)) 
 std::vector<Vec3d> GenerateTextJob::debug_cut_points_in_world;
 void GenerateTextJob::process(Ctl &ctl)
 {
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] GenerateTextJob::process STARTED on worker";
     auto canceled = was_canceled(ctl, *m_input.m_data_update.base);
     if (canceled)
         return;
-    create_all_char_mesh(*m_input.m_data_update.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
-    m_input.m_text_absolute_cursors = m_input.m_text_shape.text_absolute_cursors;
-    m_input.m_text_align_offsets    = m_input.m_text_shape.text_align_offsets;
-    m_input.m_align_type = m_input.m_text_shape.align_type;
+    // Guard the full text-mesh pipeline: create_all_char_mesh (per-glyph
+    // emboss) and generate_mesh_according_points (per-glyph cut_surface_to_its
+    // when use_surface, plus mesh merges). All of this is CGAL Epeck exact-
+    // rational work on the PlaterWorker thread and can overflow the worker
+    // stack on near-degenerate input -- outside the cut_surface guard. The
+    // mid-body JobException throws and bare returns propagate cleanly through
+    // the void guard lambda.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] GenerateTextJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            create_all_char_mesh(*m_input.m_data_update.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
+            m_input.m_text_absolute_cursors = m_input.m_text_shape.text_absolute_cursors;
+            m_input.m_text_align_offsets    = m_input.m_text_shape.text_align_offsets;
+            m_input.m_align_type = m_input.m_text_shape.align_type;
 
-    if (m_input.m_chars_mesh_result.empty()) {
-        return;
-    }
-    if (!update_text_positions(m_input)) {
-        throw JobException("update_text_positions fail.");
-    }
-    if (!generate_text_points(m_input))
-       throw JobException("generate_text_volume fail.");
-    GenerateTextJob::debug_cut_points_in_world = m_input.m_cut_points_in_world;
-    if (m_input.use_surface) {
-        if (m_input.m_text_shape.shapes_with_ids.empty())
-            throw JobException(_u8L("Font doesn't have any shape for given text.").c_str());
-    }
-    generate_mesh_according_points(m_input);
+            if (m_input.m_chars_mesh_result.empty()) {
+                return;
+            }
+            if (!update_text_positions(m_input)) {
+                throw JobException("update_text_positions fail.");
+            }
+            if (!generate_text_points(m_input))
+               throw JobException("generate_text_volume fail.");
+            GenerateTextJob::debug_cut_points_in_world = m_input.m_cut_points_in_world;
+            if (m_input.use_surface) {
+                if (m_input.m_text_shape.shapes_with_ids.empty())
+                    throw JobException(_u8L("Font doesn't have any shape for given text.").c_str());
+            }
+            generate_mesh_according_points(m_input);
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] GenerateTextJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
 
 void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
 {
-    if (canceled || eptr)
+    // Route any pending JobException through exception_process() so it
+    // surfaces as a NON-BLOCKING toast via NotificationManager rather
+    // than escaping up to PlaterWorker::PlaterJob::finalize and producing
+    // the modal "An unexpected error occurred: ..." dialog with an OK
+    // button.
+    //
+    // Previous implementation:
+    //     if (canceled || eptr) return;
+    // -- which silently dropped the cancellation case but, on the eptr
+    // path, returned WITHOUT calling exception_process. The eptr lived on
+    // and was caught by PlaterWorker's outer std::exception handler,
+    // which is the modal-dialog path. With the helper-subprocess wrapper
+    // turning previously-rare CGAL stack-stomp crashes into a routine
+    // recoverable failure mode, every failed cut now hit that modal --
+    // exactly the UX regression reported.
+    //
+    // Why we don't call _finalize() here: GenerateTextJob's InputInfo
+    // (see EmbossJob.hpp around line 346) has no top-level `base` field
+    // pointing at a DataBase, unlike UpdateSurfaceVolumeJob /
+    // CreateSurfaceVolumeJob / etc. _finalize() expects DataBase.cancel
+    // for an extra cancellation check; here we get cancellation purely
+    // through the `canceled` argument the worker passes us.
+    if (canceled) {
+        eptr = nullptr;
         return;
+    }
+    if (eptr && exception_process(eptr))
+        return;
+
+    // Even on the SUCCESS path (no exception), the worker can finish with an
+    // empty m_final_text_mesh: GenerateTextJob::process clean-returns without
+    // throwing when m_chars_mesh_result is empty (all-space / no-glyph fonts),
+    // and the surround-projection path can yield no geometry. Committing that
+    // empty mesh into the model is exactly what produced the
+    // update_volume_bboxes 0x0 crash (empty its.indices -> .front() on a null
+    // vector data pointer during slicing-prep). Guard here, before the
+    // create/recreate branch, and surface a recoverable toast instead.
+    //
+    // This guard is also load-bearing for the first_generate block below: it
+    // reads volumes.size()-1 assuming create_text_volume just pushed a volume.
+    // If create_text_volume no-op'd on an empty mesh, that index would point
+    // at a pre-existing unrelated volume and the selection/gizmo code would
+    // operate on the wrong one. Bailing here keeps that block correct.
+    if (m_input.m_final_text_mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "[EMBOSS-RECOVERY] GenerateTextJob::finalize: final text mesh is "
+               "empty; not committing a volume. Keeping previous geometry.";
+        if (auto *plater = wxGetApp().plater()) {
+            if (auto *nm = plater->get_notification_manager()) {
+                nm->push_warning_notification(
+                    NotificationType::CustomNotification,
+                    NotificationManager::NotificationLevel::PrintInfoNotificationLevel,
+                    _u8L("Couldn't apply text to surface. Try moving the text, "
+                         "shrinking it, or simplifying the surface underneath."));
+            }
+        }
+        return;
+    }
+
     if (m_input.first_generate) {
-        create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info);
+        if (!create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info))
+            return; // empty-mesh guard inside create_text_volume already bailed
         auto                model_object = m_input.mo;
         m_input.m_volume_idx;
         auto                volume_idx       = model_object->volumes.size() - 1;
@@ -1961,7 +2247,19 @@ void  GenerateTextJob::generate_mesh_according_points(InputInfo &input_info)
         mesh.merge(sub_mesh);
     }
     if (mesh.its.empty()){
-        throw JobException(_u8L("Text mesh ie empty.").c_str());
+        // This message is the user-visible failure for the most common
+        // recoverable case: cut_surface() returned an empty SurfaceCut
+        // (either cleanly because the surface had no valid projection, or
+        // because cut_surface_via_helper's child died on a CGAL/GMP
+        // stack-stomp -- both produce an empty cut here, both deserve the
+        // same actionable hint). Previous text was "Text mesh ie empty."
+        // [sic, original typo] which combined with PlaterWorker's
+        // "An unexpected error occurred: <msg>" prefix produced an alarming
+        // and uninformative toast. The replacement matches the message
+        // used at every other JobException site for surface-cut failures
+        // (see UpdateSurfaceVolumeJob / CreateSurfaceVolumeJob).
+        throw JobException(_u8L("Couldn't apply text to surface. Try moving the text, "
+                                "shrinking it, or simplifying the surface underneath.").c_str());
         return;
     }
     //ASCENT_CENTER = 1 / 2.5;// mesh.translate(Vec3f(0, -center.y(), 0)); // align vertical center
@@ -1970,17 +2268,31 @@ void  GenerateTextJob::generate_mesh_according_points(InputInfo &input_info)
 CreateObjectTextJob::CreateObjectTextJob(CreateTextInput &&input) : m_input(std::move(input)) {}
 
 void CreateObjectTextJob::process(Ctl &ctl) {
-    create_all_char_mesh(*m_input.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
-    m_input.m_text_absolute_cursors = m_input.m_text_shape.text_absolute_cursors;
-    m_input.m_text_align_offsets    = m_input.m_text_shape.text_align_offsets;
-    m_input.m_align_type            = m_input.m_text_shape.align_type;
+    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateObjectTextJob::process STARTED on worker";
+    // Guard the per-glyph emboss mesh-generation (create_all_char_mesh). Same
+    // worker-stack-overflow risk as the other text jobs. The position/length
+    // math after it is plain geometry but is cheap and stays inside the unit;
+    // the mid-body bare return propagates cleanly through the void guard.
+    bool hw_fail = false;
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectTextJob::process: entering signal-guarded region";
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            create_all_char_mesh(*m_input.base, m_input.m_chars_mesh_result, m_input.m_text_cursors, m_input.m_text_shape);
+            m_input.m_text_absolute_cursors = m_input.m_text_shape.text_absolute_cursors;
+            m_input.m_text_align_offsets    = m_input.m_text_shape.text_align_offsets;
+            m_input.m_align_type            = m_input.m_text_shape.align_type;
 
-    if (m_input.m_chars_mesh_result.empty()) {
-        return;
-    }
-    std::vector<double> text_lengths;
-    calc_text_lengths(text_lengths, m_input.m_text_cursors);
-    calc_position_points(m_input.m_position_points, text_lengths, m_input.text_info.m_text_gap, Vec3d(1, 0, 0));
+            if (m_input.m_chars_mesh_result.empty()) {
+                return;
+            }
+            std::vector<double> text_lengths;
+            calc_text_lengths(text_lengths, m_input.m_text_cursors);
+            calc_position_points(m_input.m_position_points, text_lengths, m_input.text_info.m_text_gap, Vec3d(1, 0, 0));
+        },
+        [&]{ hw_fail = true; });
+    BOOST_LOG_TRIVIAL(info) << "[EMBOSS-RECOVERY] CreateObjectTextJob::process: exited signal-guarded region, hw_fail=" << hw_fail;
+    if (hw_fail)
+        throw JobException(_u8L("Couldn't generate text mesh. Try a different font, weight, or size.").c_str());
 }
 
 void CreateObjectTextJob::finalize(bool canceled, std::exception_ptr &eptr) {

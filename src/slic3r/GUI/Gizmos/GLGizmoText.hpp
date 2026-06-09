@@ -116,6 +116,8 @@ private:
     bool m_is_advanced_edit_style = false;
     // True when m_text contain character unknown by selected font
     bool m_text_contain_unknown_glyph = false;
+    // True when the last text input was truncated to MAX_EMBOSS_TEXT_CODEPOINTS.
+    bool m_text_truncated = false;
     std::string        m_style_new_name = "";
     // For text on scaled objects
     std::optional<float>     m_scale_height;

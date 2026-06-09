@@ -217,6 +217,14 @@ public:
 	// ErrorNotificationLevel are never faded out.
     void push_notification(NotificationType type, NotificationLevel level, const std::string& text, const std::string& hypertext = "",
                            std::function<bool(wxEvtHandler*)> callback = std::function<bool(wxEvtHandler*)>(), int timestamp = 0);
+    // As push_notification(type, level, text), but renders in the WARNING
+    // color palette (orange/yellow) even at fade-out levels like
+    // PrintInfo / Regular. Used by recoverable-failure surfaces (emboss
+    // text-cut returned empty: not a "success" green, not a loud no-fade
+    // red error, but a "this attempt failed, please notice, the slider is
+    // still usable" hue). The flag is NotificationData::use_warn_color,
+    // exposed here through the public push_notification API.
+    void push_warning_notification(NotificationType type, NotificationLevel level, const std::string& text, int timestamp = 0);
 	// Pushes basic_notification with delay. See push_delayed_notification_data.
 	void push_delayed_notification(const NotificationType type, std::function<bool(void)> condition_callback, int64_t initial_delay, int64_t delay_interval);
 	// Removes all notifications of type from m_waiting_notifications

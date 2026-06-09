@@ -328,6 +328,13 @@ void set_log_path_and_level(const std::string& file, unsigned int level, const L
 #endif
 
 	g_log_sink_backend = boost::make_shared<LogSinkBackend>(file, enc_options);
+    // INVESTIGATION (fix/lan-stale-mqtt-and-wake): force auto_flush so that
+    // every log line is fsync'd to disk before the call returns. Without this
+    // boost.log's text_file_backend buffers stdio writes, and a crash loses the
+    // last several KB of buffered log -- making it look like instrumentation
+    // breadcrumbs stopped firing when in fact they fired but never made it to
+    // disk. We're paying log throughput for crash-truth correctness.
+    g_log_sink_backend->auto_flush(true);
     g_log_sink = boost::make_shared<LogSink>(g_log_sink_backend);
 	g_log_sink->set_formatter(
 		expr::stream

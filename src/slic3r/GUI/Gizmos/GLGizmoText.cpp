@@ -47,6 +47,27 @@ using namespace Slic3r;
 using namespace Slic3r::GUI;
 using namespace Slic3r::GUI::Emboss;
 using namespace Slic3r::Emboss;
+
+namespace {
+// Truncate a UTF-8 string to at most max_codepoints, on a codepoint boundary.
+// Returns true if truncation occurred. Dependency-free lead-byte scan.
+bool truncate_utf8_to_codepoints(std::string &s, size_t max_codepoints)
+{
+    size_t cp = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        // count only codepoint lead bytes
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) {
+            if (cp == max_codepoints) {
+                s.resize(i);   // i is the byte offset of the (max+1)-th codepoint's lead byte
+                return true;
+            }
+            ++cp;
+        }
+    }
+    return false;
+}
+} // namespace
+
 static std::size_t hash_value(wxString const &s)
 {
     boost::hash<std::string> hasher;
@@ -108,6 +129,14 @@ static const struct Limits
     // distance text object from surface
     MinMax<float> angle{-180.f, 180.f}; // in degrees
 } limits;
+
+// Maximum number of Unicode codepoints allowed in embossed text. Each glyph
+// drives an expensive CGAL Epeck exact-arithmetic surface cut; an unbounded
+// paste (e.g. thousands of emoji) can overrun the worker stack and crash.
+// 256 is far more than any legitimate embossed label/name while decisively
+// preventing accidental huge pastes. Tunable.
+static const size_t MAX_EMBOSS_TEXT_CODEPOINTS = 256;
+
 enum class IconType : unsigned {
     rename = 0,
     warning,
@@ -2577,6 +2606,8 @@ void GLGizmoText::draw_text_input(int caption_width)
         if (m_text_contain_unknown_glyph) {
             append_warning(_u8L("Unsupported characters automatically switched to fallback font."));
         }
+        if (m_text_truncated)
+            append_warning(GUI::format(_u8L("Text was truncated to %1% characters."), MAX_EMBOSS_TEXT_CODEPOINTS));
         const FontProp &prop = m_style_manager.get_font_prop();
        /* if (prop.skew.has_value())//BBS modify
             append_warning(_u8L("Text input doesn't show font skew."));
@@ -2601,6 +2632,7 @@ void GLGizmoText::draw_text_input(int caption_width)
     ImVec2                    input_size(2 * m_gui_cfg->input_width, m_gui_cfg->text_size.y); // 2 * m_gui_cfg->input_width - caption_width
     const ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput;// | ImGuiInputTextFlags_AutoSelectAll
     if (ImGui::InputTextMultiline("##Text", &m_text, input_size, flags)) {
+        m_text_truncated = truncate_utf8_to_codepoints(m_text, MAX_EMBOSS_TEXT_CODEPOINTS);
         if (m_style_manager.get_font_prop().per_glyph) {
             unsigned count_lines = get_count_lines(m_text);
             //if (count_lines != m_text_lines.get_lines().size())

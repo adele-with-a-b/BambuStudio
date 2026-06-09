@@ -360,6 +360,11 @@ namespace Emboss
         std::pair<Vec3d, Vec3d> create_front_back(const Point &p) const override;
         Vec3d project(const Vec3d &point) const override;
         std::optional<Vec2d> unproject(const Vec3d &p, double * depth = nullptr) const override;
+        // Read-only accessors used by CutSurfaceHelper to serialize the
+        // projection across the helper-process pipe. See CutSurfaceHelper.cpp
+        // (wire-format ProjectionKind::PROJ_ORTHO).
+        const Transform3d &matrix()    const { return m_matrix; }
+        const Vec3d       &direction() const { return m_direction; }
     };
 
     /// <summary>

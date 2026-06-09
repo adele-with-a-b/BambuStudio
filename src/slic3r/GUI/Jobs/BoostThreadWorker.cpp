@@ -1,6 +1,7 @@
 #include <exception>
 
 #include "BoostThreadWorker.hpp"
+#include <boost/log/trivial.hpp>
 
 namespace Slic3r { namespace GUI {
 
@@ -40,24 +41,33 @@ void BoostThreadWorker::run()
 {
     bool stop = false;
     while (!stop) {
+        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker::run loop top, waiting for next job";
         m_input_queue
             .consume_one(BlockingWait{0, &m_running}, [this, &stop](JobEntry &e) {
+                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: pulled job from queue (job=" << (e.job ? "non-null" : "null/stop") << ")";
                 if (!e.job)
                     stop = true;
                 else {
                     m_canceled.store(false);
 
                     try {
+                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: about to call job->process";
                         e.job->process(*this);
+                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: job->process returned normally";
                     } catch (...) {
+                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: job->process threw exception";
                         e.eptr = std::current_exception();
                     }
 
                     e.canceled = m_canceled.load();
+                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: pushing JobEntry to output queue (calls move ctors)";
                     m_output_queue.push(std::move(e)); // finalization message
+                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: output_queue.push returned";
                 }
                 m_running.store(false);
+                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: lambda exiting (job destroyed if moved-from copy)";
             });
+        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: consume_one returned, looping";
     };
 }
 
@@ -83,6 +93,26 @@ BoostThreadWorker::BoostThreadWorker(std::shared_ptr<ProgressIndicator> pri,
 {
     if (m_progress)
         m_progress->set_cancel_callback([this](){ cancel(); });
+
+    // Bump the worker stack to 16 MB if the caller didn't set an explicit
+    // size. This worker runs the UI job queue including emboss-text /
+    // surface-cut jobs whose CGAL Epeck + GMP exact-rational pipeline
+    // recurses deeply on near-degenerate input (emoji glyphs, etc.). At
+    // the previous 4 MB default we observed reproducible stack-stomp
+    // crashes (see CutSurface.cpp watchdog comment, removed 2026-06-05;
+    // the GUI symptom: emboss text editing crashed the app with a
+    // __gmpn_mul_1 / __gmpn_matrix22_mul1_inverse_vector backtrace).
+    //
+    // The stack-stomp class of crash is now defended-in-depth via
+    // CutSurfaceHelper::cut_surface_via_helper() which forks the work
+    // into a subprocess; this stack bump is the cheaper first-line
+    // defence so most cuts succeed in-process and the helper subprocess
+    // is a fallback for the truly pathological cases. 16 MB matches the
+    // OrcaSlicer community default and is well below macOS / Linux
+    // per-process address-space limits (effectively unlimited at our
+    // scale).
+    if (attribs.get_stack_size() == 0)
+        attribs.set_stack_size(16 * 1024 * 1024); // 16 MB
 
     m_thread = create_thread(attribs, [this] { this->run(); });
 
