@@ -1,8 +1,3 @@
-#include <cstring>
-#include <cstdio>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <pthread.h>          // pthread_self() for breadcrumb thread-id logging
 #include "CutSurface.hpp"
 
 /// models_input.obj - Check transormation of model to each others
@@ -1460,49 +1455,6 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
     // pipeline (corefine + set_face_type + diff_models/clip +
     // calc_distances), because the overflow can surface at any of those
     // Epeck-heavy steps, not just corefine. See Slic3r::cut_surface.
-    // INVESTIGATION (fix/lan-stale-mqtt-and-wake): dump every corefine input
-    // pair to /tmp/corefine_dumps/seq_NNN_{model,shape}.off with a monotonic
-    // per-thread sequence number. After each call, write a sibling marker file
-    // seq_NNN.survived. The pair WITHOUT a .survived marker is the one whose
-    // corefine never returned -- i.e. THE crashing call, with its exact inputs.
-    // We also log call count + thread id so the trail correlates uniquely.
-    static thread_local int s_corefine_seq = 0;
-    int seq_num = ++s_corefine_seq;
-    char dirpath[64]; std::snprintf(dirpath, sizeof(dirpath), "/tmp/corefine_dumps");
-    ::mkdir(dirpath, 0755); // ignore EEXIST
-    char model_path[160], shape_path[160], survived_path[160];
-    unsigned long tid = (unsigned long)(uintptr_t)pthread_self();
-    std::snprintf(model_path, sizeof(model_path),
-                  "/tmp/corefine_dumps/seq_%04d_tid_%lx_model.off", seq_num, tid);
-    std::snprintf(shape_path, sizeof(shape_path),
-                  "/tmp/corefine_dumps/seq_%04d_tid_%lx_shape.off", seq_num, tid);
-    std::snprintf(survived_path, sizeof(survived_path),
-                  "/tmp/corefine_dumps/seq_%04d_tid_%lx.survived", seq_num, tid);
-    CGAL::IO::write_OFF(model_path, cgal_model);
-    CGAL::IO::write_OFF(shape_path, cgal_shape);
-
-    // PRE-FLIGHT GUARD: reject inputs that are anomalously large for emboss-text
-    // corefine. Empirically (test_corefine_replay seq_0030 reproducer) at
-    // model_v >= 2000 + shape_v >= 1000 the CGAL Epeck recursion blows the 4 MB
-    // worker stack faster than the signal handler can recover. Typical emboss
-    // text-on-surface inputs have ~300-500 vert models and ~100-1000 vert shapes;
-    // the >>2000 vert case happens when the source surface is high-poly (or
-    // unusually subdivided) AND the glyph is intricate (high-vertex emoji).
-    // Rejecting these up-front avoids the racy signal-delivery failure mode and
-    // surfaces "couldn't apply text" instead of a hard crash. The thresholds
-    // are conservative and won't reject anything close to typical use.
-    const size_t model_v = cgal_model.number_of_vertices();
-    const size_t shape_v = cgal_shape.number_of_vertices();
-    bool prefilter_reject = (model_v > 2000 && shape_v > 800);
-    if (prefilter_reject) {
-        BOOST_LOG_TRIVIAL(error) << "PMP::corefine call #" << seq_num
-                                 << " REJECTED pre-flight (model_v=" << model_v
-                                 << ", shape_v=" << shape_v
-                                 << ") -- input too large for safe Epeck corefine; marking cut invalid";
-        is_valid = false;
-        return {};
-    }
-
     // Tight inner signal guard around corefine ONLY.
     //
     // Removed (2026-06-05): the wall-clock watchdog that fired
@@ -1544,13 +1496,9 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
         [&]() { corefine_overflow = true; });
 
     if (corefine_overflow) {
-        BOOST_LOG_TRIVIAL(error) << "PMP::corefine call #" << seq_num
-                                 << " stack-overflow caught at tight guard; marking cut invalid";
+        BOOST_LOG_TRIVIAL(error)
+            << "PMP::corefine: stack-overflow caught at signal guard; marking cut invalid";
         is_valid = false;
-    } else {
-        if (FILE *mf = std::fopen(survived_path, "w")) {
-            std::fprintf(mf, "ok\n"); std::fclose(mf);
-        }
     }
 
     if (!is_valid) return {};
