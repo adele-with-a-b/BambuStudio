@@ -134,7 +134,6 @@ template<class _Mesh> void triangle_mesh_to_cgal(const TriangleMesh& M, _Mesh& o
     using Index3 = std::array<size_t, 3>;
 
     if (M.empty()) return;
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] triangle_mesh_to_cgal(TriangleMesh) entry verts=" << M.its.vertices.size() << " tris=" << M.its.indices.size();
 
     std::vector<typename _Mesh::Point> points;
     std::vector<Index3> indices;
@@ -165,7 +164,6 @@ void triangle_mesh_to_cgal(const std::vector<stl_vertex> &                 V,
                            _Mesh &out)
 {
     if (F.empty()) return;
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] triangle_mesh_to_cgal(stl_vertex) entry verts=" << V.size() << " tris=" << F.size();
 
     size_t vertices_count = V.size();
     size_t edges_count    = (F.size()* 3) / 2;
@@ -275,7 +273,6 @@ static bool _cgal_intersection(CGALMesh &A, CGALMesh &B, CGALMesh &R)
 
 template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] _cgal_do entry (corefine boolean)";
     bool success = false;
     bool hw_fail = false;
     try {
@@ -305,7 +302,6 @@ void minus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_diff, A, B); }
 void plus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_union, A, B); }
 void intersect(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_intersection, A, B); }
 bool does_self_intersect(const CGALMesh &mesh) {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_self_intersect(CGALMesh) entry";
     return CGALProc::does_self_intersect(mesh.m);
 }
 // BBS
@@ -470,7 +466,6 @@ void intersect(indexed_triangle_set &A, const indexed_triangle_set &B)
 
 bool does_self_intersect(const TriangleMesh &mesh)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_self_intersect(TriangleMesh) entry verts=" << mesh.its.vertices.size();
     CGALMesh cgalm;
     triangle_mesh_to_cgal(mesh.its.vertices, mesh.its.indices, cgalm.m);
     return CGALProc::does_self_intersect(cgalm.m);
@@ -480,7 +475,6 @@ void CGALMeshDeleter::operator()(CGALMesh *ptr) { delete ptr; }
 
 bool does_bound_a_volume(const CGALMesh &mesh)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] does_bound_a_volume(CGALMesh) entry";
     return CGAL::is_closed(mesh.m) && CGALProc::does_bound_a_volume(mesh.m);
 }
 

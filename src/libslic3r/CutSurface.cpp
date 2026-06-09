@@ -613,7 +613,6 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     }
 
     priv::SurfacePatches patches = priv::diff_models(model_cuts, cgal_models, cgal_neg_models, projection);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: diff_models returned, patches=" << patches.size();
 #ifdef DEBUG_OUTPUT_DIR
     priv::store(patches, DEBUG_OUTPUT_DIR + "patches/");
 #endif // DEBUG_OUTPUT_DIR
@@ -628,21 +627,15 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     // it is used for distiguish the top one
     uint32_t shapes_points = s2i.get_count();
     // for each point collect all projection distances
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: calc_distances enter (shapes_points=" << shapes_points << ", patches=" << patches.size() << ")";
     priv::VDistances distances = priv::calc_distances(patches, cgal_models, cgal_shape, shapes_points, projection_ratio);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: calc_distances exit";
 
     Point start = shapes_bb.center(); // only align center
 
     // Use only outline points
     // for each point select best projection
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: choose_best_distance enter";
     priv::ProjectionDistances best_projection = priv::choose_best_distance(distances, shapes, start, s2i, patches);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: choose_best_distance exit; select_patches enter";
     std::vector<bool> use_patch = priv::select_patches(best_projection, patches, shapes, shapes_bb, s2i, model_cuts, cgal_models, projection);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: select_patches exit; merge_patches enter";
     result = merge_patches(patches, use_patch);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] cut_surface: merge_patches exit";
     //*/
 
 #ifdef DEBUG_OUTPUT_DIR
@@ -1489,11 +1482,6 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
                   "/tmp/corefine_dumps/seq_%04d_tid_%lx.survived", seq_num, tid);
     CGAL::IO::write_OFF(model_path, cgal_model);
     CGAL::IO::write_OFF(shape_path, cgal_shape);
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] corefine call #" << seq_num
-                            << " (tid=" << std::hex << tid << std::dec
-                            << ") model_v=" << cgal_model.number_of_vertices()
-                            << " shape_v=" << cgal_shape.number_of_vertices()
-                            << " dumped to " << model_path;
 
     // PRE-FLIGHT GUARD: reject inputs that are anomalously large for emboss-text
     // corefine. Empirically (test_corefine_replay seq_0030 reproducer) at
@@ -1517,7 +1505,6 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
         return {};
     }
 
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] PMP::corefine entry (call #" << seq_num << ")";
     // Tight inner signal guard around corefine ONLY.
     //
     // Removed (2026-06-05): the wall-clock watchdog that fired
@@ -1567,8 +1554,6 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
             std::fprintf(mf, "ok\n"); std::fclose(mf);
         }
     }
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] PMP::corefine call #" << seq_num
-                            << " returned (overflow=" << corefine_overflow << ")";
 
     if (!is_valid) return {};
 
@@ -2707,7 +2692,6 @@ void priv::create_face_types(FaceTypeMap           &map,
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
 bool priv::clip_cut(SurfacePatch &cut, CutMesh clipper)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] priv::clip_cut entry (CGAL PMP::clip)";
     CutMesh& tm = cut.mesh;
     // create backup for case that there is no intersection
     CutMesh backup_copy = tm;
@@ -3183,7 +3167,6 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
                                        /*const*/ CutMeshes &models,
                                        const Project3d     &projection)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] priv::diff_models entry";
     // IMPROVE: when models contain ONE mesh. It is only about convert cuts to patches
     // and reduce unneccessary triangles on contour
 
@@ -3210,32 +3193,24 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
         create_reduce_map(vertex_reduction_map, cut_model);
 
         for (size_t cut_index = 0; cut_index < model_cuts.size(); ++cut_index, ++index) {
-            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models loop m=" << model_index << " c=" << cut_index;
             const CutAOI &cut = model_cuts[cut_index];
             SurfacePatchEx patch_ex;
             SurfacePatch  &patch = patch_ex.patch;
-            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: create_surface_patch enter";
             patch = create_surface_patch(cut.first, cut_model_, &vertex_reduction_map);
-            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: create_surface_patch exit";
             patch.bb = bbs[index];
             patch.aoi_id   = cut_index;
             patch.model_id = model_index;
             patch.shape_id = get_shape_point_index(cut, cut_model);
             patch.is_whole_aoi = true;
 
-            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: aoi_patches clear+push (CGAL Surface_mesh copy)";
             aoi_patches.clear();
             aoi_patches.push_back(patch_ex);
-            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: aoi_patches done, entering inner model loop n_models=" << models.size();
             for (size_t model_index2 = 0; model_index2 < models.size(); ++model_index2) {
                 // do not clip source model itself
                 if (model_index == model_index2) continue;
-                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: inner loop m2=" << model_index2;
                 for (SurfacePatchEx &patch_ex : aoi_patches) {
                     SurfacePatch &patch = patch_ex.patch;
-                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: has_bb_intersection check";
                     bool bb_hit = has_bb_intersection(patch.bb, model_index2, bbs, m2i);
-                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: has_bb_intersection=" << bb_hit;
                     if (bb_hit && clip_cut(patch, models[model_index2])){
                         patch_ex.just_cliped = true;
                     } else {
@@ -3243,17 +3218,13 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
                         // NOTE: it is possible not neccessary: e.g. one model
                         Tree &tree = trees[model_index2];
                         if (tree.empty()) {
-                            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: AABB tree.build enter for model_index2=" << model_index2;
                             const CutMesh &model   = models[model_index2];
                             auto           f_range = faces(model);
                             tree.insert(f_range.first, f_range.second, model);
                             tree.build();
-                            BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: AABB tree.build exit";
                         }
-                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: is_patch_inside_of_model enter";
                         if (is_patch_inside_of_model(patch, tree, projection))
                             patch_ex.full_inside = true;
-                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] diff_models: is_patch_inside_of_model exit";
                     }
                 }
                 // erase full inside

@@ -434,7 +434,6 @@ UpdateSurfaceVolumeJob::UpdateSurfaceVolumeJob(UpdateSurfaceVolumeData &&input) 
 
 void UpdateSurfaceVolumeJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] UpdateSurfaceVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for UseSurfaceJob.");
     // Defense-in-depth: wrap the whole body in a signal guard like every other
@@ -480,7 +479,6 @@ UpdateJob::UpdateJob(DataUpdate &&input) : m_input(std::move(input)) {}
 
 void UpdateJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] UpdateJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossUpdateJob.");
 
@@ -549,7 +547,6 @@ void UpdateJob::update_volume(ModelVolume *volume, TriangleMesh &&mesh, const Da
 CreateObjectJob::CreateObjectJob(DataCreateObject &&input) : m_input(std::move(input)) {}
 void CreateObjectJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateObjectJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossCreateObjectJob.");
 
@@ -687,7 +684,6 @@ void CreateObjectJob::finalize(bool canceled, std::exception_ptr &eptr)
 CreateSurfaceVolumeJob::CreateSurfaceVolumeJob(CreateSurfaceVolumeData &&input) : m_input(std::move(input)) {}
 void CreateSurfaceVolumeJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateSurfaceVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for CreateSurfaceVolumeJob.");
     // Defense-in-depth signal guard, matching UpdateSurfaceVolumeJob's pattern.
@@ -720,7 +716,6 @@ CreateVolumeJob::CreateVolumeJob(DataCreateVolume &&input) : m_input(std::move(i
 
 void CreateVolumeJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateVolumeJob::process STARTED on worker";
     if (!check(m_input))
         throw JobException("Bad input data for EmbossCreateVolumeJob.");
     // Guard the CGAL text/glyph mesh-generation; same worker-stack-overflow
@@ -1604,7 +1599,6 @@ GenerateTextJob::GenerateTextJob(InputInfo &&input) : m_input(std::move(input)) 
 std::vector<Vec3d> GenerateTextJob::debug_cut_points_in_world;
 void GenerateTextJob::process(Ctl &ctl)
 {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] GenerateTextJob::process STARTED on worker";
     auto canceled = was_canceled(ctl, *m_input.m_data_update.base);
     if (canceled)
         return;
@@ -2268,7 +2262,6 @@ void  GenerateTextJob::generate_mesh_according_points(InputInfo &input_info)
 CreateObjectTextJob::CreateObjectTextJob(CreateTextInput &&input) : m_input(std::move(input)) {}
 
 void CreateObjectTextJob::process(Ctl &ctl) {
-    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] CreateObjectTextJob::process STARTED on worker";
     // Guard the per-glyph emboss mesh-generation (create_all_char_mesh). Same
     // worker-stack-overflow risk as the other text jobs. The position/length
     // math after it is plain geometry but is cheap and stays inside the unit;

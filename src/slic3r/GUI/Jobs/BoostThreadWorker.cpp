@@ -41,33 +41,24 @@ void BoostThreadWorker::run()
 {
     bool stop = false;
     while (!stop) {
-        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker::run loop top, waiting for next job";
         m_input_queue
             .consume_one(BlockingWait{0, &m_running}, [this, &stop](JobEntry &e) {
-                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: pulled job from queue (job=" << (e.job ? "non-null" : "null/stop") << ")";
                 if (!e.job)
                     stop = true;
                 else {
                     m_canceled.store(false);
 
                     try {
-                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: about to call job->process";
                         e.job->process(*this);
-                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: job->process returned normally";
                     } catch (...) {
-                        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: job->process threw exception";
                         e.eptr = std::current_exception();
                     }
 
                     e.canceled = m_canceled.load();
-                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: pushing JobEntry to output queue (calls move ctors)";
                     m_output_queue.push(std::move(e)); // finalization message
-                    BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: output_queue.push returned";
                 }
                 m_running.store(false);
-                BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: lambda exiting (job destroyed if moved-from copy)";
             });
-        BOOST_LOG_TRIVIAL(info) << "[CGAL-BREADCRUMB] BoostThreadWorker: consume_one returned, looping";
     };
 }
 
