@@ -35,6 +35,9 @@ using namespace Slic3r;
 #include "TriangleMesh.hpp" // its_merge
 #include "Utils.hpp" // next_highest_power_of_2
 #include "ClipperUtils.hpp" // union_ex + offset_ex
+#include "Exception.hpp"   // HardCrash
+#include "TryCatchSignal.hpp"
+#include <boost/log/trivial.hpp>
 
 namespace priv {
 
@@ -531,6 +534,25 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     assert(!shapes.empty());
     if (models.empty() || shapes.empty() ) return {};
 
+    // The entire CGAL cut pipeline below runs under a signal guard.
+    // corefine, the post-corefine face-type/flood-fill work, diff_models
+    // (which calls CGAL clip), calc_distances and select_patches all run
+    // CGAL Epeck (exact rational) predicates. On near-degenerate input
+    // (very fine glyph paths, near-coplanar surfaces under the embossed
+    // text -- e.g. detailed emoji glyphs at small sizes) the Lazy_exact_nt
+    // DAG walk plus GMP's mpn_hgcd recursion can overflow the worker
+    // thread stack. Bumping the stack only moves the threshold; the
+    // robust fix is to catch the resulting SIGSEGV/SIGBUS/SIGFPE and
+    // surface a non-fatal "couldn't apply text to surface" error to the
+    // user (see EmbossJob.cpp) rather than taking down the whole app.
+    // The guard wraps the WHOLE pipeline, not just corefine, because the
+    // overflow has been observed downstream of corefine (in the
+    // post-corefine Epeck work) as well as in corefine itself.
+    SurfaceCut result;
+    bool       cut_hw_fail = false;
+    try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+
 #ifdef DEBUG_OUTPUT_DIR
     priv::initialize_store(DEBUG_OUTPUT_DIR);
     priv::store(models, DEBUG_OUTPUT_DIR + "models_input.obj");
@@ -588,7 +610,7 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
 #ifdef DEBUG_OUTPUT_DIR
     priv::store(patches, DEBUG_OUTPUT_DIR + "patches/");
 #endif // DEBUG_OUTPUT_DIR
-    if (patches.empty()) return {};
+    if (patches.empty()) return; // empty cut -> outer `result` stays empty
 
     // fix - convert shape_point_id to expolygon index
     // save 1 param(s2i) from diff_models call
@@ -607,12 +629,21 @@ SurfaceCut Slic3r::cut_surface(const ExPolygons &shapes,
     // for each point select best projection
     priv::ProjectionDistances best_projection = priv::choose_best_distance(distances, shapes, start, s2i, patches);
     std::vector<bool> use_patch = priv::select_patches(best_projection, patches, shapes, shapes_bb, s2i, model_cuts, cgal_models, projection);
-    SurfaceCut result = merge_patches(patches, use_patch);
+    result = merge_patches(patches, use_patch);
     //*/
 
 #ifdef DEBUG_OUTPUT_DIR
     priv::store(result, DEBUG_OUTPUT_DIR + "result.obj", DEBUG_OUTPUT_DIR + "result_contours/");
 #endif // DEBUG_OUTPUT_DIR
+
+        }, // end of signal-guarded fn()
+        [&]() { cut_hw_fail = true; });
+
+    if (cut_hw_fail) {
+        BOOST_LOG_TRIVIAL(error) << "cut_surface stack overflow caught -- recovering as HardCrash";
+        throw Slic3r::HardCrash("CGAL surface cut crashed (likely stack overflow on near-degenerate input).");
+    }
+
     return result;
 }
 
@@ -1419,7 +1450,56 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
                         .edge_is_constrained_map(ecm)
                         .throw_on_self_intersection(false);
     const auto& q = CGAL::parameters::do_not_modify(true);
-    CGAL::Polygon_mesh_processing::corefine(cgal_model, cgal_shape, p, q);
+    // NOTE: the SIGBUS/SIGSEGV/SIGFPE stack-overflow guard for the CGAL
+    // Epeck arithmetic is NOT here -- it wraps the whole cut_surface()
+    // pipeline (corefine + set_face_type + diff_models/clip +
+    // calc_distances), because the overflow can surface at any of those
+    // Epeck-heavy steps, not just corefine. See Slic3r::cut_surface.
+    // Tight inner signal guard around corefine ONLY.
+    //
+    // Removed (2026-06-05): the wall-clock watchdog that fired
+    // pthread_kill(SIGBUS) at the worker after a 20s deadline. Two reasons:
+    //
+    // 1. The original premise -- "corefine can enter non-terminating
+    //    computation on degenerate input" -- did not survive measurement.
+    //    Researcher stress (30 invocations of every dump in
+    //    /tmp/corefine_dumps/, identical binary) showed the crash rate is
+    //    ~3-13% per invocation across the WHOLE pool, with no input-only
+    //    discriminator. The mechanism is GMP exact-rational recursion that
+    //    grows the stack to within a few KB of the available headroom; ASLR
+    //    + dyld load order shifts the layout enough between launches to flip
+    //    whether the recursion fits. It's a stack-layout race, not a hung
+    //    computation, so a 20s deadline never approaches the actual failure
+    //    mode (the production crash dies in ~80 ms inside __gmpn_mul_1).
+    //
+    // 2. The Apple kernel attribution on the 2026-06-05 10:52:48 crash --
+    //    "Bad access in stack guard region for thread 44 but crash was
+    //    associated with thread 43 -- possible stray access?" -- points
+    //    squarely at watchdog-induced stack tearing. pthread_kill(SIGBUS)
+    //    delivered to a thread mid-recursion through GMP / Epeck makes the
+    //    handler run on the alt stack and siglongjmp back, but the
+    //    in-flight return-address chain on the worker stack has already
+    //    been written through by the recursion. The longjmp lands in
+    //    garbage. So the watchdog plausibly CAUSED the irrecoverable case
+    //    rather than recovering from it.
+    //
+    // The structural fix lives in CutSurfaceHelper.cpp -- run cut_surface()
+    // in a forked subprocess so the parent never sees the stack-stomp. The
+    // tight inner guard here is kept as defence in depth for the in-process
+    // path (e.g. callers that bypass cut_surface_via_helper, or platforms
+    // where forking isn't available).
+    bool corefine_overflow = false;
+    try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            CGAL::Polygon_mesh_processing::corefine(cgal_model, cgal_shape, p, q);
+        },
+        [&]() { corefine_overflow = true; });
+
+    if (corefine_overflow) {
+        BOOST_LOG_TRIVIAL(error)
+            << "PMP::corefine: stack-overflow caught at signal guard; marking cut invalid";
+        is_valid = false;
+    }
 
     if (!is_valid) return {};
 
@@ -3076,8 +3156,8 @@ priv::SurfacePatches priv::diff_models(VCutAOIs            &cuts,
                 if (model_index == model_index2) continue;
                 for (SurfacePatchEx &patch_ex : aoi_patches) {
                     SurfacePatch &patch = patch_ex.patch;
-                    if (has_bb_intersection(patch.bb, model_index2, bbs, m2i) &&
-                        clip_cut(patch, models[model_index2])){
+                    bool bb_hit = has_bb_intersection(patch.bb, model_index2, bbs, m2i);
+                    if (bb_hit && clip_cut(patch, models[model_index2])){
                         patch_ex.just_cliped = true;
                     } else {
                         // build tree on demand

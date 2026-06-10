@@ -8,6 +8,7 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Format/OBJ.hpp> // load_obj for default mesh
 #include <libslic3r/CutSurface.hpp> // use surface cuts
+#include <libslic3r/CutSurfaceHelper.hpp> // cut_surface_via_helper -- subprocess isolation for the CGAL/GMP stack-stomp class of crashes
 #include <libslic3r/BuildVolume.hpp> // create object
 #include <libslic3r/SLA/ReprojectPointsOnMesh.hpp>
 
@@ -926,8 +927,29 @@ indexed_triangle_set cut_surface_to_its(const ExPolygons &shapes, float scale, c
         shapes_ptr = &shapes_data;
     }
 
-    // Use CGAL to cut surface from triangle mesh
-    SurfaceCut cut = Slic3r::cut_surface(*shapes_ptr, itss, cut_projection, projection_ratio);
+    // Use CGAL to cut surface from triangle mesh.
+    //
+    // We route through cut_surface_via_helper(), which forks the same
+    // BambuStudio binary in helper-process mode (--cut-surface-helper),
+    // sends the inputs via a binary IPC over fds 50/51, runs the real
+    // Slic3r::cut_surface() in there, and pipes the result back. If the
+    // helper dies by signal (the GMP/Epeck stack-stomp class of crashes),
+    // exits non-zero, or exceeds the wall-clock deadline, the wrapper
+    // returns an empty SurfaceCut and the caller below falls through the
+    // "if (cut.empty())" path to a clean "couldn't apply text" toast --
+    // exactly the same recovery surface as the in-process try_catch_signal
+    // path used to provide, but UNCONDITIONAL: a stack-stomp inside the
+    // helper cannot tear the GUI process's stack, so recovery doesn't
+    // depend on the handler being able to siglongjmp out of corrupted
+    // frames.
+    //
+    // The helper has its own internal try_catch_signal guards (defence in
+    // depth) but the top-level recovery is the OS killing the helper.
+    //
+    // Cost: per-cut spawn (a few ms) + IPC marshaling. Negligible vs the
+    // CGAL Epeck pipeline that follows.
+    SurfaceCut cut = Slic3r::cut_surface_via_helper(
+        *shapes_ptr, itss, cut_projection, projection_ratio);
 
     if (is_text_reflected) {
         for (SurfaceCut::Contour &c : cut.contours) std::reverse(c.begin(), c.end());

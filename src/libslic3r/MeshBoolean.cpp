@@ -277,7 +277,13 @@ template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
     bool hw_fail = false;
     try {
         CGALMesh result;
-        try_catch_signal({SIGSEGV, SIGFPE}, [&success, &A, &B, &result, &op] {
+        // SIGBUS included alongside SIGSEGV/SIGFPE: on macOS a stack
+        // overflow in CGAL's exact-arithmetic recursion is delivered as
+        // SIGBUS (fault at the stack guard page), not SIGSEGV. Without
+        // SIGBUS here the boolean guard silently fails to catch the most
+        // common real-world crash on macOS. (POSIX try_catch_signal was
+        // a no-op stub until recently, so this gap was latent.)
+        try_catch_signal({SIGSEGV, SIGFPE, SIGBUS}, [&success, &A, &B, &result, &op] {
             success = op(A, B, result);
         }, [&] { hw_fail = true; });
         A = std::move(result);      // In-place operation does not work
@@ -295,7 +301,9 @@ template<class Op> void _cgal_do(Op &&op, CGALMesh &A, CGALMesh &B)
 void minus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_diff, A, B); }
 void plus(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_union, A, B); }
 void intersect(CGALMesh &A, CGALMesh &B) { _cgal_do(_cgal_intersection, A, B); }
-bool does_self_intersect(const CGALMesh &mesh) { return CGALProc::does_self_intersect(mesh.m); }
+bool does_self_intersect(const CGALMesh &mesh) {
+    return CGALProc::does_self_intersect(mesh.m);
+}
 // BBS
 void segment(CGALMesh& src, std::vector<CGALMesh>& dst, double smoothing_alpha = 0.5, int segment_number=5)
 {
