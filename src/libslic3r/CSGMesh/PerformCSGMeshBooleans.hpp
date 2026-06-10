@@ -11,6 +11,8 @@
 #include "libslic3r/Execution/ExecutionTBB.hpp"
 //#include "libslic3r/Execution/ExecutionSeq.hpp"
 #include "libslic3r/MeshBoolean.hpp"
+#include "libslic3r/TryCatchSignal.hpp"
+#include <csignal>
 
 namespace Slic3r { namespace csg {
     enum class BooleanFailReason { OK, MeshEmpty, NotBoundAVolume, SelfIntersect, NoIntersection};
@@ -31,10 +33,31 @@ MeshBoolean::cgal::CGALMeshPtr get_cgalmesh(const CSGPartT &csgpart)
     indexed_triangle_set m = *its;
     its_transform(m, get_transform(csgpart), true);
 
-    try {
-        ret = MeshBoolean::cgal::triangle_mesh_to_cgal(m);
-    } catch (...) {
-        // errors are ignored, simply return null
+    // triangle_mesh_to_cgal calls CGAL Polygon_mesh_processing operations
+    // (orient_polygon_soup, polygon_soup_to_polygon_mesh, orient_to_bound_a_volume)
+    // which dispatch through CGAL Epeck (exact-rational) predicates internally,
+    // regardless of the caller's surface-mesh kernel. On near-degenerate input
+    // (e.g. an emboss text mesh with thin features + heavy boldness offset),
+    // those exact-arithmetic paths can overflow the worker thread's stack via
+    // unbounded GMP GCD recursion. The C++ try/catch below cannot catch a
+    // SIGSEGV/SIGBUS/SIGFPE from that overflow -- the process dies with no
+    // handler frame on the stack (observed: core.89638, core.31576). Wrap in
+    // try_catch_signal so the overflow degrades to a null CGALMeshPtr, which
+    // the existing return-null path already handles (the boolean check then
+    // reports a normal "boolean not possible" rather than crashing the app).
+    bool hw_fail = false;
+    Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+        [&]() -> void {
+            try {
+                ret = MeshBoolean::cgal::triangle_mesh_to_cgal(m);
+            } catch (...) {
+                // errors are ignored, simply return null
+                ret = nullptr;
+            }
+        },
+        [&]{ hw_fail = true; });
+    if (hw_fail) {
+        BOOST_LOG_TRIVIAL(error) << "csg::get_cgalmesh: CGAL Epeck stack overflow caught -- returning null mesh";
         ret = nullptr;
     }
 
@@ -293,7 +316,29 @@ std::tuple<BooleanFailReason,std::string> check_csgmesh_booleans(const Range<It>
                 return;
             }*/
 
-            if (MeshBoolean::cgal::does_self_intersect(*m)) {
+            // does_self_intersect uses CGAL Polygon_mesh_processing which
+            // dispatches through Epeck exact-rational arithmetic internally.
+            // On near-degenerate meshes (e.g. emboss text with thin features
+            // and heavy boldness offset), the exact-arithmetic recursion can
+            // overflow the worker stack via unbounded GMP GCD. The C++ try/catch
+            // below cannot catch SIGSEGV/SIGBUS/SIGFPE -- the process dies with
+            // no handler frame. Wrap in try_catch_signal so an overflow degrades
+            // to "treat as self-intersecting" (the existing failure path),
+            // letting the slicer surface a graceful error instead of crashing.
+            // (cf. the commented-out does_bound_a_volume above marked "has crash
+            // problem" -- same root cause; this one wasn't disabled.)
+            bool si_overflow = false;
+            bool si_result = false;
+            Slic3r::try_catch_signal({SIGSEGV, SIGBUS, SIGFPE},
+                [&]() -> void { si_result = MeshBoolean::cgal::does_self_intersect(*m); },
+                [&]{ si_overflow = true; });
+            if (si_overflow) {
+                BOOST_LOG_TRIVIAL(error) << "check_csgmesh_booleans: does_self_intersect stack-overflowed on mesh " << i << "/" << csgrange.size() << "; treating as self-intersecting";
+                fail_reason = BooleanFailReason::SelfIntersect;
+                fail_part_name = csgpart.name;
+                return;
+            }
+            if (si_result) {
                 BOOST_LOG_TRIVIAL(info) << "check_csgmesh_booleans fails! mesh " << i << "/" << csgrange.size() << " does_self_intersect is true, cannot do boolean!";
                 fail_reason= BooleanFailReason::SelfIntersect;
                 fail_part_name = csgpart.name;
