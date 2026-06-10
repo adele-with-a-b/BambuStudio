@@ -299,7 +299,12 @@ if (NOT MSVC AND ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR "${CMAKE_CXX_COMP
     endif()
 
     if((${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQUAL "AppleClang") AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER 15)
-        add_compile_options(-Wno-error=enum-constexpr-conversion)
+        # AppleClang <=20 recognizes -Wno-error=enum-constexpr-conversion;
+        # AppleClang 21+ does not, and treats the unknown flag as a hard
+        # error under -Werror,-Wunknown-warning-option. -Wno-unknown-warning-option
+        # makes the unrecognized flag a no-op instead of a fatal error,
+        # so the same source builds across AppleClang 15-21+.
+        add_compile_options(-Wno-unknown-warning-option -Wno-error=enum-constexpr-conversion)
     endif()
 
     #GCC generates loads of -Wunknown-pragmas when compiling igl. The fix is not easy due to a bug in gcc, see
