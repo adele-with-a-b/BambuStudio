@@ -333,8 +333,11 @@ public:
     void finalize(bool canceled, std::exception_ptr &eptr) override;
 };
 
-void recreate_model_volume(Slic3r::ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info);
-void create_text_volume(Slic3r::ModelObject *model_object,  const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info);
+// Return true if a volume was committed, false if the call was a no-op
+// because the mesh was empty (empty its.indices) -- see definitions in
+// EmbossJob.cpp for the non-empty invariant and the crash it prevents.
+bool recreate_model_volume(Slic3r::ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info);
+bool create_text_volume(Slic3r::ModelObject *model_object,  const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info);
 class GenerateTextJob : public JobNew
 {
 public:

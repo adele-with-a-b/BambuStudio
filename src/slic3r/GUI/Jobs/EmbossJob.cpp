@@ -184,8 +184,27 @@ bool is_valid(ModelVolumeType volume_type)
 }
 
 
-void recreate_model_volume(ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
+bool recreate_model_volume(ModelObject *model_object, int volume_idx, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
 {
+    // INVARIANT: never insert a ModelVolume with an empty mesh into the model.
+    // An empty its.indices means the downstream slicing-prep bbox pass
+    // (PrintApply.cpp transformed_its_bbox2d -> its.indices.front()) reads
+    // from a null vector data pointer and crashes with KERN_INVALID_ADDRESS
+    // at 0x0. An empty cut reaches here when the emboss surface-cut returns
+    // no geometry for a pathological glyph/surface combination.
+    //
+    // For the recreate (slider-edit) case the right behaviour is to KEEP the
+    // existing good volume untouched: no snapshot, no add_volume, no swap.
+    // The user is left with the last-good geometry. UpdateJob::update_volume
+    // already enforces this same non-empty invariant; the text-creation
+    // helpers historically did not.
+    if (mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "recreate_model_volume: empty mesh (no indices); "
+               "keeping previous volume, not committing an empty text_shape.";
+        return false;
+    }
+
     wxGetApp() .plater()->take_snapshot("Modify Text");
 
     ModelVolume *model_volume     = model_object->volumes[volume_idx];
@@ -200,10 +219,22 @@ void recreate_model_volume(ModelObject *model_object, int volume_idx, const Tria
     model_object->delete_volume(model_object->volumes.size() - 1);
     model_object->invalidate_bounding_box();
     wxGetApp().plater()->update();
+    return true;
 }
 
-void create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
+bool create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &mesh, Geometry::Transformation &text_tran, TextInfo &text_info)
 {
+    // Same non-empty invariant as recreate_model_volume (see its comment).
+    // For the create (first-generate) case there is no prior volume to
+    // preserve, so we simply do not create one: the user sees no new text
+    // appear, which beats inserting an empty volume that crashes slicing-prep.
+    if (mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "create_text_volume: empty mesh (no indices); "
+               "not creating an empty text_shape volume.";
+        return false;
+    }
+
     wxGetApp().plater()->take_snapshot("create_text_volume");
 
     ModelVolume *new_model_volume = model_object->add_volume(mesh, false);
@@ -220,6 +251,7 @@ void create_text_volume(Slic3r::ModelObject *model_object, const TriangleMesh &m
 
     model_object->invalidate_bounding_box();
     wxGetApp().plater()->update();
+    return true;
 }
 
 bool check(unsigned char gizmo_type) { return gizmo_type == (unsigned char) GLGizmosManager::Svg; }
@@ -1443,8 +1475,29 @@ void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
 {
     if (canceled || eptr)
         return;
+
+    // Even on the success path the worker can finish with an empty
+    // m_final_text_mesh (all-space/no-glyph fonts, or a surround-projection
+    // that yields no geometry). Committing that empty mesh into the model is
+    // what produces the update_volume_bboxes 0x0 crash during the next
+    // slicing-prep (empty its.indices -> .front() on a null vector data
+    // pointer). Guard here, before the create/recreate branch.
+    //
+    // This guard is also load-bearing for the first_generate block below: it
+    // reads volumes.size()-1 assuming create_text_volume just pushed a volume.
+    // If create_text_volume no-op'd on an empty mesh, that index would point
+    // at a pre-existing unrelated volume and the selection/gizmo code would
+    // operate on the wrong one. Bailing here keeps that block correct.
+    if (m_input.m_final_text_mesh.its.indices.empty()) {
+        BOOST_LOG_TRIVIAL(warning)
+            << "GenerateTextJob::finalize: final text mesh is empty; "
+               "not committing a volume. Keeping previous geometry.";
+        return;
+    }
+
     if (m_input.first_generate) {
-        create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info);
+        if (!create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info))
+            return; // empty-mesh guard inside create_text_volume already bailed
         auto                model_object = m_input.mo;
         m_input.m_volume_idx;
         auto                volume_idx       = model_object->volumes.size() - 1;
