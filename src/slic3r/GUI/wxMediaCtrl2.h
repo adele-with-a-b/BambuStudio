@@ -44,7 +44,12 @@ public:
     void SetConstrainByAspectRatio(bool constrain) { m_constrain_by_aspect_ratio = constrain; }
     bool GetConstrainByAspectRatio() const { return m_constrain_by_aspect_ratio; }
 
-    static constexpr wxMediaState MEDIASTATE_BUFFERING = (wxMediaState) 6;
+    // const not constexpr: AppleClang 21+ rejects `constexpr (wxMediaState) 6`
+    // because the wxMediaState enum's underlying type is incomplete at this
+    // class-scope declaration, so the cast cannot be evaluated at compile time.
+    // `const` produces an in-class definition that any AppleClang version
+    // accepts and is link-equivalent in practice. Same fix in MediaPlayCtrl.h.
+    static const wxMediaState MEDIASTATE_BUFFERING = (wxMediaState) 6;
 
 protected:
     void DoSetSize(int x, int y, int width, int height, int sizeFlags) override;
