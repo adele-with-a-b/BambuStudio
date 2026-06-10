@@ -1,6 +1,7 @@
 #include <exception>
 
 #include "BoostThreadWorker.hpp"
+#include <boost/log/trivial.hpp>
 
 namespace Slic3r { namespace GUI {
 
@@ -83,6 +84,26 @@ BoostThreadWorker::BoostThreadWorker(std::shared_ptr<ProgressIndicator> pri,
 {
     if (m_progress)
         m_progress->set_cancel_callback([this](){ cancel(); });
+
+    // Bump the worker stack to 16 MB if the caller didn't set an explicit
+    // size. This worker runs the UI job queue including emboss-text /
+    // surface-cut jobs whose CGAL Epeck + GMP exact-rational pipeline
+    // recurses deeply on near-degenerate input (emoji glyphs, etc.). At
+    // the previous 4 MB default we observed reproducible stack-stomp
+    // crashes (see CutSurface.cpp watchdog comment, removed 2026-06-05;
+    // the GUI symptom: emboss text editing crashed the app with a
+    // __gmpn_mul_1 / __gmpn_matrix22_mul1_inverse_vector backtrace).
+    //
+    // The stack-stomp class of crash is now defended-in-depth via
+    // CutSurfaceHelper::cut_surface_via_helper() which forks the work
+    // into a subprocess; this stack bump is the cheaper first-line
+    // defence so most cuts succeed in-process and the helper subprocess
+    // is a fallback for the truly pathological cases. 16 MB matches the
+    // OrcaSlicer community default and is well below macOS / Linux
+    // per-process address-space limits (effectively unlimited at our
+    // scale).
+    if (attribs.get_stack_size() == 0)
+        attribs.set_stack_size(16 * 1024 * 1024); // 16 MB
 
     m_thread = create_thread(attribs, [this] { this->run(); });
 

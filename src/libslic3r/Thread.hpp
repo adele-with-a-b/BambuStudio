@@ -46,11 +46,16 @@ void name_tbb_thread_pool_threads_set_locale();
 template<class Fn>
 inline boost::thread create_thread(boost::thread::attributes &attrs, Fn &&fn)
 {
-    // Duplicating the stack allocation size of Thread Building Block worker
-    // threads of the thread pool: allocate 4MB on a 64bit system, allocate 2MB
-    // on a 32bit system by default.
-    
-    attrs.set_stack_size((sizeof(void*) == 4) ? (2048 * 1024) : (4096 * 1024));
+    // Default stack size: duplicate the Thread Building Block worker pool's
+    // size (allocate 4MB on a 64bit system, 2MB on a 32bit system). This
+    // only fires if the caller didn't ALREADY set a non-zero stack size on
+    // attrs -- letting callers like BoostThreadWorker pre-set a larger
+    // stack (16 MB) for their workers without having that override silently
+    // clobbered. The previous version of this function unconditionally
+    // overwrote attrs.set_stack_size(), which made the attrs parameter
+    // effectively meaningless for stack sizing.
+    if (attrs.get_stack_size() == 0)
+        attrs.set_stack_size((sizeof(void*) == 4) ? (2048 * 1024) : (4096 * 1024));
     return boost::thread{attrs, std::forward<Fn>(fn)};
 }
 
