@@ -120,10 +120,13 @@ bool exception_process(std::exception_ptr &eptr)
         // uses the same style for non-blocking object-state warnings).
         if (auto *plater = wxGetApp().plater()) {
             if (auto *nm = plater->get_notification_manager()) {
+                // "Warning:\n" prefix matches the established CX pattern for
+                // warning toasts (SlicingWarning / PlaterWarning / AssemblyWarning
+                // in NotificationManager all use _u8L("Warning:") + "\n" + text).
                 nm->push_warning_notification(
                     NotificationType::CustomNotification,
                     NotificationManager::NotificationLevel::PrintInfoNotificationLevel,
-                    e.what());
+                    _u8L("Warning:") + "\n" + e.what());
                 eptr = nullptr;
                 return true;
             }
@@ -1681,6 +1684,7 @@ void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
                 nm->push_warning_notification(
                     NotificationType::CustomNotification,
                     NotificationManager::NotificationLevel::PrintInfoNotificationLevel,
+                    _u8L("Warning:") + "\n" +
                     _u8L("Couldn't apply text to surface. Try moving the text, "
                          "shrinking it, or simplifying the surface underneath."));
             }

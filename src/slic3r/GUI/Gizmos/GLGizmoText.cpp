@@ -2347,9 +2347,17 @@ void GLGizmoText::on_render_input_window(float x, float y, float bottom_limit)
     ImGui::SameLine(caption_size);
     ImGui::PushItemWidth(temp_input_width); // 2 * m_gui_cfg->input_width
     float old_value = m_thickness;
-    ImGui::InputFloat("###text_thickness", &m_thickness, 0.0f, 0.0f, "%.2f");
+    // Commit-gate: only re-cut when the user finishes editing (presses Enter or
+    // moves focus off the field), not on every keystroke. Typing "13" over "9"
+    // previously fired a full surface re-cut at 1 then 13 -- wasted work, and
+    // each cut is another roll of the CGAL/GMP stack-stomp dice. Matches the
+    // Enter-to-apply behaviour used elsewhere in the slicer (process settings).
+    bool thickness_committed =
+        ImGui::InputFloat("###text_thickness", &m_thickness, 0.0f, 0.0f, "%.2f",
+                          ImGuiInputTextFlags_EnterReturnsTrue);
+    thickness_committed |= ImGui::IsItemDeactivatedAfterEdit();
     m_thickness = ImClamp(m_thickness, m_thickness_min, m_thickness_max);
-    if (old_value != m_thickness) {
+    if (thickness_committed && old_value != m_thickness) {
         process();
     }
     auto full_width = caption_size + 2 * m_gui_cfg->input_width;
@@ -2376,10 +2384,13 @@ void GLGizmoText::on_render_input_window(float x, float y, float bottom_limit)
 
         ImGui::PushItemWidth(valid_width);
         old_value = m_embeded_depth;
-        if (ImGui::InputFloat("###text_embeded_depth", &m_embeded_depth, 0.0f, 0.0f, "%.2f")) {
-            limit_value(m_embeded_depth, 0.0f, m_embeded_depth_max);
-        }
-        if (old_value != m_embeded_depth) {
+        // Commit-gate (see Thickness above): re-cut only on Enter / focus-leave.
+        bool depth_committed =
+            ImGui::InputFloat("###text_embeded_depth", &m_embeded_depth, 0.0f, 0.0f, "%.2f",
+                              ImGuiInputTextFlags_EnterReturnsTrue);
+        depth_committed |= ImGui::IsItemDeactivatedAfterEdit();
+        limit_value(m_embeded_depth, 0.0f, m_embeded_depth_max);
+        if (depth_committed && old_value != m_embeded_depth) {
             process();
         }
     }
@@ -2390,26 +2401,31 @@ void GLGizmoText::on_render_input_window(float x, float y, float bottom_limit)
     m_imgui->text(_L("Text Gap"));
     ImGui::SameLine(caption_size);
     ImGui::PushItemWidth(slider_width);
-    if (m_imgui->bbl_slider_float_style("##text_gap", &m_text_gap, -10.f, 100.f, "%.2f", 1.0f, true))
+    // Gate the (expensive) surface re-cut on commit: track the value live while
+    // sliding, but only regenerate the text when the user stops sliding. Matches
+    // the Boldness/Skew sliders below and avoids a re-cut on every slide frame.
+    m_imgui->bbl_slider_float_style("##text_gap", &m_text_gap, -10.f, 100.f, "%.2f", 1.0f, true);
+    if (m_imgui->get_last_slider_status().deactivated_after_edit)
         m_need_update_text = true;
 
     ImGui::SameLine(drag_left_width);
     ImGui::PushItemWidth(1.5 * slider_icon_width);
-    if (ImGui::BBLDragFloat("##text_gap_input", &m_text_gap, 0.05f, -10.f, 100.f, "%.2f")) {
-        bool need_deal = false;
+    // Same gate for the numeric drag/text box: update the boundary tracking live,
+    // but defer the re-cut until the edit is committed (Enter / focus loss / drag
+    // release) so typing a multi-digit value doesn't re-cut on each keystroke.
+    bool text_gap_input_changed   = ImGui::BBLDragFloat("##text_gap_input", &m_text_gap, 0.05f, -10.f, 100.f, "%.2f");
+    bool text_gap_input_committed = ImGui::IsItemDeactivatedAfterEdit();
+    if (text_gap_input_changed) {
         if (abs(m_text_gap_min_max - 100.f) < 0.01f || abs(m_text_gap_min_max + 10) < 0.01f) {
             if (abs(m_text_gap - m_text_gap_min_max) > 0.01f) {
                 m_text_gap_min_max = m_text_gap;
-                need_deal          = true;
             }
         } else {
-            need_deal              = true;
             m_text_gap_min_max = 0.f;
         }
-        if (need_deal) {
-            m_need_update_text = true;
-        }
     }
+    if (text_gap_input_committed)
+        m_need_update_text = true;
 
     draw_rotation(caption_size, slider_width, drag_left_width, slider_icon_width);
 #if BBL_RELEASE_TO_PUBLIC
@@ -2817,7 +2833,22 @@ void GLGizmoText::draw_height(bool use_inch)
     const char *       size_format      = use_inch ? "%.2f in" : "%.1f mm";
     const std::string  revert_text_size = _u8L("Revert text size.");
     const std::string &name             = m_gui_cfg->translations.height;
-    if (rev_input_mm(name, value, stored, revert_text_size, 0.1f, 1.f, size_format, use_inch, m_scale_height)) {
+    // rev_input_mm returns true on every keystroke; gate the re-cut on commit
+    // (Enter / focus-leave) the same way Thickness and Embedded depth do, so
+    // typing a multi-digit size ("10") fires one cut at 10 rather than a cut at
+    // 1 then 10. The value (and the revert affordance) still update live; only
+    // the expensive surface re-cut is deferred to commit. rev_input_mm has a
+    // single caller (this one), so gating here is fully isolated.
+    //
+    // Two commit signals: ImGui::IsItemDeactivatedAfterEdit() for the input
+    // field (Enter / focus-leave), and the revert-arrow click -- which
+    // revertible() reports by setting get_last_slider_status().deactivated_after_edit.
+    // The revert arrow is a single discrete action (one value, one cut), so it's
+    // safe to apply immediately.
+    bool size_changed   = rev_input_mm(name, value, stored, revert_text_size, 0.1f, 1.f, size_format, use_inch, m_scale_height);
+    bool reverted       = m_imgui->get_last_slider_status().deactivated_after_edit;
+    bool size_committed = ImGui::IsItemDeactivatedAfterEdit() || (size_changed && reverted);
+    if (size_committed) {
         if (set_height()) {
             process();
         }
@@ -2967,21 +2998,24 @@ void GLGizmoText::draw_advanced(float caption_size, float slider_width, float sl
     }
     ImGui::SameLine(drag_left_width + ad_space_size);
     ImGui::PushItemWidth(1.5 * slider_icon_width);
-    if (ImGui::BBLDragFloat("##text_boldness_input", &m_custom_boldness, 1, min_boldness, max_boldness, "%.0f")) {
-        bool need_deal = false;
+    // Track the boldness value live while typing/dragging, but defer the surface
+    // re-cut until the edit is committed (Enter / focus loss / drag release) so a
+    // multi-digit entry (e.g. "100") doesn't re-cut on each intermediate keystroke.
+    bool boldness_input_changed   = ImGui::BBLDragFloat("##text_boldness_input", &m_custom_boldness, 1, min_boldness, max_boldness, "%.0f");
+    bool boldness_input_committed = ImGui::IsItemDeactivatedAfterEdit();
+    if (boldness_input_changed) {
         if (abs(m_text_boldness_min_max - max_boldness) < 0.01f || abs(m_text_boldness_min_max + min_boldness) < 0.01f) {
             if (abs(m_custom_boldness - m_text_boldness_min_max) > 0.01f) {
                 m_text_boldness_min_max = m_custom_boldness;
-                need_deal          = true;
             }
         } else {
-            need_deal          = true;
             m_text_boldness_min_max = 0.f;
         }
-        if (need_deal) {
-            boldness           = m_custom_boldness;
-            m_need_update_text = true;
-        }
+        boldness = m_custom_boldness;
+    }
+    if (boldness_input_committed) {
+        boldness           = m_custom_boldness;
+        m_need_update_text = true;
     }
     std::optional<float> &skew = m_style_manager.get_font_prop().skew;
     m_custom_skew              = skew.value_or(0);
@@ -2999,21 +3033,24 @@ void GLGizmoText::draw_advanced(float caption_size, float slider_width, float sl
     }
     ImGui::SameLine(drag_left_width + ad_space_size);
     ImGui::PushItemWidth(1.5 * slider_icon_width);
-    if (ImGui::BBLDragFloat("##text_skew_input", &m_custom_skew, 1, min_skew, max_skew, "%.1f")) {
-        bool need_deal = false;
+    // Track the skew value live while typing/dragging, but defer the surface
+    // re-cut until the edit is committed (Enter / focus loss / drag release) so a
+    // multi-digit entry doesn't re-cut on each intermediate keystroke.
+    bool skew_input_changed   = ImGui::BBLDragFloat("##text_skew_input", &m_custom_skew, 1, min_skew, max_skew, "%.1f");
+    bool skew_input_committed = ImGui::IsItemDeactivatedAfterEdit();
+    if (skew_input_changed) {
         if (abs(m_text_skew_min_max - max_skew) < 0.01f || abs(m_text_skew_min_max + min_skew) < 0.01f) {
             if (abs(m_custom_skew - m_text_skew_min_max) > 0.01f) {
                 m_text_skew_min_max = m_custom_skew;
-                need_deal               = true;
             }
         } else {
-            need_deal               = true;
             m_text_skew_min_max = 0.f;
         }
-        if (need_deal) {
-            skew           = m_custom_skew;
-            m_need_update_text = true;
-        }
+        skew = m_custom_skew;
+    }
+    if (skew_input_committed) {
+        skew               = m_custom_skew;
+        m_need_update_text = true;
     }
 }
 

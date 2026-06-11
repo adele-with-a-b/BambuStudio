@@ -8522,6 +8522,11 @@ int main(int argc, char **argv)
     if (argc >= 2 && std::strcmp(argv[1], "--cut-surface-helper") == 0)
         return Slic3r::cut_surface_helper_main();
 
+    // Verification-only sub-mode: exercise the helper's crash-report
+    // suppression against an OFF pair on disk. Not used in normal operation.
+    if (argc >= 4 && std::strcmp(argv[1], "--cut-surface-helper-selftest") == 0)
+        return Slic3r::cut_surface_helper_selftest(argv[2], argv[3]);
+
 #ifndef _MSC_VER
     // Arm the process-wide alternate-signal-stack coverage BEFORE anything that
     // spins up threads (wxWidgets, TBB worker pool, network). The introspection

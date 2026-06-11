@@ -1450,6 +1450,36 @@ priv::CutAOIs priv::cut_from_model(CutMesh                &cgal_model,
                         .edge_is_constrained_map(ecm)
                         .throw_on_self_intersection(false);
     const auto& q = CGAL::parameters::do_not_modify(true);
+
+    // PRE-FLIGHT GUARD: reject inputs that are anomalously large for emboss-text
+    // corefine, BEFORE calling corefine at all. At model_v > 2000 + shape_v > 800
+    // the CGAL Epeck exact-rational recursion blows the worker stack via GMP GCD
+    // (__gmpn_*) faster than any signal handler can reliably recover, so the
+    // process dies and macOS files a crash report. Typical emboss text-on-surface
+    // inputs have ~300-500 vert models and ~100-1000 vert shapes; the >>2000 vert
+    // case happens when the source surface is high-poly AND the glyph is intricate
+    // (high-vertex emoji such as the skull U+2620 in Noto Emoji). Rejecting these
+    // up-front surfaces a clean "couldn't apply text" instead of letting the cut
+    // reach corefine and crash. The thresholds are conservative and won't reject
+    // anything close to typical use.
+    //
+    // This guard is load-bearing for the no-crash-report behaviour: without it,
+    // pathological inputs reach corefine, the (subprocess) worker stomps its
+    // stack and dies by signal, and the OS crash reporter fires. With it, those
+    // inputs never reach corefine. (Validated June 8; do NOT remove.)
+    {
+        const size_t model_v = cgal_model.number_of_vertices();
+        const size_t shape_v = cgal_shape.number_of_vertices();
+        if (model_v > 2000 && shape_v > 800) {
+            BOOST_LOG_TRIVIAL(error)
+                << "PMP::corefine REJECTED pre-flight (model_v=" << model_v
+                << ", shape_v=" << shape_v
+                << ") -- input too large for safe Epeck corefine; marking cut invalid";
+            is_valid = false;
+            return {};
+        }
+    }
+
     // NOTE: the SIGBUS/SIGSEGV/SIGFPE stack-overflow guard for the CGAL
     // Epeck arithmetic is NOT here -- it wraps the whole cut_surface()
     // pipeline (corefine + set_face_type + diff_models/clip +

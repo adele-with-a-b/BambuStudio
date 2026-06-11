@@ -54,6 +54,15 @@ SurfaceCut cut_surface_via_helper(const ExPolygons                        &shape
 // is the parent's recovery cue.
 int cut_surface_helper_main();
 
+// Self-test entry point: installs the SAME crash-report suppression the real
+// helper uses, then runs corefine on the given OFF pair (the crash path).
+// Used to verify that the suppression actually prevents a macOS crash report
+// on a known-hostile input, exercising the shipped guard code (not a separate
+// harness). main() dispatches here on argv[1] == "--cut-surface-helper-selftest"
+// <model.off> <shape.off>. Exits 0 if corefine returned, EXIT_HELPER_OVERFLOW
+// if the guard caught a stomp/throw. Either way: no crash report should be filed.
+int cut_surface_helper_selftest(const char *model_off, const char *shape_off);
+
 } // namespace Slic3r
 
 #endif // slic3r_CutSurfaceHelper_hpp_
