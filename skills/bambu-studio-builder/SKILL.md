@@ -16,8 +16,9 @@ Build, develop, and contribute to the patched BambuStudio slicer.
 
 ## Repository
 
-**Source:** `~/workspace/BambuStudio` (or `~/work/projects/BambuStudio`)
-**Deps:** `../BambuStudio_dep` (relative to source — auto-detects `usr/local` vs `destdir/usr/local`)
+**Source:** `~/workplace/oss/bambu-studio` (canonical OSS-fork roof; `origin` = our fork, `upstream` = `bambulab/BambuStudio`)
+**Deps source:** `deps/` in-tree (CMake superbuild)
+**Deps build tree:** `deps_build/` — installs to `deps_build/destdir/usr/local` (`dev-build.sh` auto-detects `usr/local` vs `destdir/usr/local`)
 **Fork:** https://github.com/adele-with-a-b/BambuStudio
 
 ## Branch Strategy
@@ -33,7 +34,7 @@ Build, develop, and contribute to the patched BambuStudio slicer.
 ## Build
 
 ```bash
-cd ~/work/projects/BambuStudio
+cd ~/workplace/oss/bambu-studio
 ./dev-build.sh          # incremental build + install to /Applications
 ./dev-build.sh clean    # reconfigure cmake + full build + install
 ./dev-build.sh build    # build only, don't install
@@ -53,6 +54,21 @@ After install, `dev-build.sh` automatically:
 - Clears build.log before build (prevents progress bar confusion from configure output)
 
 ### Troubleshooting
+
+**`./dev-build.sh: no such file or directory` — the script is branch-scoped.** `dev-build.sh` and `skills/` are fork-only files tracked on `dev` (and branches cut from `dev`). They are deliberately ABSENT from upstream-PR branches (`preset-hot-reload` etc.) so the PR diff stays clean. `git switch preset-hot-reload` therefore DELETES the script from the working tree, and the next build launch dies with exit 127. Verified 2026-09-05 — do not misdiagnose as a cwd, PATH, or sandbox problem; run `pwd; ls dev-build.sh; git rev-parse --abbrev-ref HEAD` in the FOREGROUND first.
+
+Restore it as an untracked file (won't pollute the PR branch):
+```bash
+git show dev:dev-build.sh > dev-build.sh && chmod +x dev-build.sh
+```
+**Then delete it before switching back**, or `git switch` aborts with "untracked working tree files would be overwritten" — and if you chain a `git stash pop` onto that aborted switch with `&&`/newline, the pop applies to the WRONG branch and conflicts. Sequence: `rm -f dev-build.sh` → `git switch <branch>` → verify the branch → `git stash pop`.
+
+**New upstream dependency after a big rebase (e.g. `Could not find HPDF_LIBRARY ... names: hpdf, hpdfd`).** Rebasing onto months of upstream can introduce deps our `deps_build` prefix predates — libharu/HPDF arrived this way (`src/slic3r/CMakeLists.txt` gained `find_library(HPDF_LIBRARY ... REQUIRED)`). The deps *superbuild* cache is also stale, so `dep_libharu` isn't yet a known target. Reconfigure the superbuild, then build only the missing target — do NOT rebuild all deps:
+```bash
+cmake -S deps -B deps_build
+cmake --build deps_build --target dep_libharu -j$(sysctl -n hw.ncpu)
+```
+Confirm the artifact landed (`deps_build/destdir/usr/local/lib/libhpdf.a`) before re-running the app build. Failures of this shape are upstream/deps drift, never your feature change.
 
 **cmake 4.x compatibility:** All `cmake_minimum_required(VERSION < 3.5)` fixed in the fork. Dep downloads (wxWidgets, OpenCV, CGAL) have PATCH_COMMANDs that fix their versions automatically.
 
@@ -94,14 +110,16 @@ Cloud mode not tested and likely doesn't work, but LAN mode is the preferred wor
 
 ## Active Branches
 
-### `preset-hot-reload` (upstream PR)
+### `preset-hot-reload` (upstream PR #9919)
 - Reload user presets from disk without restart
-- File → Reload Presets (Cmd+Shift+R) — was Cmd+R, changed to avoid conflict with slice
+- File → Reload Presets (**Cmd+Shift+P**) — was Cmd+R, then Cmd+Shift+R; both collided with the slice handler, since `Cmd+Shift+R` also matches `CmdDown() && GetKeyCode()=='R'`. In `MainFrame.cpp` the reload block must come FIRST and `return`, or the slice branch swallows it.
 - Toast notification with reload stats
+- `PresetReloadResult` counts **added and removed** user presets for process, filament, AND printer kinds (`any_change()` gates the toast). In-place edits to an existing preset are invisible to the name-diff by design — the side UI refreshes unconditionally.
+- `load_user_presets(user_id, ForwardCompatibilitySubstitutionRule::EnableSilentDisableSystem)` to match the other non-interactive load sites (ConfigWizard, WebGuideDialog, PresetUpdater). Behavior-neutral: that overload discards the substitution report (`PresetBundle.cpp` returns an empty `PresetsConfigSubstitutions()`).
 - Removed reload button from Tab toolbar (confusing next to profile-specific buttons)
 - Menu entry below Batch Preset Management, cross-platform (was Mac-only)
 - `load_current_presets()` called after reload to update all tab dropdowns
-- PR reviewer: Max — feedback incorporated, awaiting next review
+- **2026-09-05:** rebased onto 571 new upstream commits (one semantic conflict in `MainFrame.cpp`), tonghao-bbl's two review points implemented and answered, compile-verified clean. Awaiting next maintainer pass.
 
 ### `preset-explorer` (new feature, branched from preset-hot-reload)
 - Complete rewrite of Batch Preset Management dialog
