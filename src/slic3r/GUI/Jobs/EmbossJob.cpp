@@ -13,13 +13,13 @@
 
 #include "libslic3r/libslic3r.h"
 #include "slic3r/GUI/Plater.hpp"
-////#include "slic3r/GUI/NotificationManager.hpp"
+#include "slic3r/GUI/NotificationManager.hpp" // recoverable JobException -> non-blocking toast
+#include "slic3r/GUI/GUI_App.hpp"              // wxGetApp().plater()->get_notification_manager()
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/SurfaceDrag.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 //#include "slic3r/GUI/MainFrame.hpp"
 //#include "slic3r/GUI/GUI.hpp"
-//#include "slic3r/GUI/GUI_App.hpp"
 //#include "slic3r/GUI/Gizmos/GLGizmoEmboss.hpp"
 #include "slic3r/GUI/Selection.hpp"
 #include "slic3r/GUI/CameraUtils.hpp"
@@ -69,6 +69,32 @@ bool exception_process(std::exception_ptr &eptr)
     try {
         std::rethrow_exception(eptr);
     } catch (JobException &e) {
+        // JobException is the type the emboss jobs use for RECOVERABLE,
+        // user-actionable failures (empty input, font with no glyph,
+        // surface-cut returned empty, etc.). Render it as a NON-BLOCKING
+        // toast rather than a modal wxMessageDialog that demands dismissal:
+        // these can fire repeatedly during a single slider drag while the
+        // user explores configurations, and the failure is recoverable
+        // without input.
+        //
+        // Style: PrintInfoNotificationLevel + the warning color palette.
+        // Regular/Print-info levels auto-fade; the warning hue signals
+        // "this attempt failed, please notice, the control is still usable"
+        // -- not a success green, not the loud no-fade red error level.
+        //
+        // Fall back to the modal only if the notification manager isn't
+        // reachable (very early teardown / headless), so the message is
+        // never silently swallowed.
+        if (auto *plater = wxGetApp().plater()) {
+            if (auto *nm = plater->get_notification_manager()) {
+                nm->push_warning_notification(
+                    NotificationType::CustomNotification,
+                    NotificationManager::NotificationLevel::PrintInfoNotificationLevel,
+                    e.what());
+                eptr = nullptr;
+                return true;
+            }
+        }
         create_message(e.what());
         eptr = nullptr;
     }
@@ -1419,7 +1445,13 @@ void GenerateTextJob::process(Ctl &ctl)
 
 void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
 {
-    if (canceled || eptr)
+    // Route through _finalize() like the other jobs in this file
+    // (UpdateSurfaceVolumeJob, UpdateJob, CreateObjectJob,
+    // CreateSurfaceVolumeJob, CreateVolumeJob). Testing `canceled || eptr`
+    // directly discards eptr without ever reaching exception_process(), which
+    // is why the JobExceptions raised in process() produce no user-visible
+    // message today.
+    if (!_finalize(canceled, eptr, *m_input.m_data_update.base))
         return;
     if (m_input.first_generate) {
         create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info);
@@ -1984,7 +2016,8 @@ void CreateObjectTextJob::process(Ctl &ctl) {
 }
 
 void CreateObjectTextJob::finalize(bool canceled, std::exception_ptr &eptr) {
-    if (canceled || eptr) return;
+    // Same reasoning as GenerateTextJob::finalize above.
+    if (!_finalize(canceled, eptr, *m_input.base)) return;
     if (m_input.m_position_points.empty())
         return create_message("Can't create empty object.");
 

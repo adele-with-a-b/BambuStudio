@@ -1659,6 +1659,17 @@ void NotificationManager::push_notification(NotificationType type,
     push_notification_data({ type, level, duration, text, hypertext, callback }, timestamp);
 }
 
+void NotificationManager::push_warning_notification(NotificationType type,
+                                                    NotificationLevel level,
+                                                    const std::string& text,
+                                                    int timestamp)
+{
+    int duration = get_standard_duration(level);
+    NotificationData data{ type, level, duration, text };
+    data.use_warn_color = true;
+    push_notification_data(data, timestamp);
+}
+
 void NotificationManager::push_delayed_notification(const NotificationType type, std::function<bool(void)> condition_callback, int64_t initial_delay, int64_t delay_interval)
 {
 	auto it = std::find_if(std::begin(basic_notifications), std::end(basic_notifications),
