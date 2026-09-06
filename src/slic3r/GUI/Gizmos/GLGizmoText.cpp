@@ -687,6 +687,8 @@ void GLGizmoText::on_set_state()
 
         m_last_text_mv = nullptr;
         m_show_text_normal_reset_tip = false;
+        // Don't carry a stale "last cut failed" state into a fresh open.
+        Emboss::GenerateTextJob::last_generate_failed = false;
         load_init_text(true);
         if (m_last_text_mv) {
             m_reedit_text = true;
@@ -1622,6 +1624,9 @@ void GLGizmoText::load_init_text(bool first_open_text)
                 }
                 if (m_last_text_mv != model_volume) {
                     first_open_text = true;
+                    // Switching to a different text volume: a pending "last cut
+                    // failed" state belonged to the previous volume, so drop it.
+                    Emboss::GenerateTextJob::last_generate_failed = false;
                 }
                 m_last_text_mv = model_volume;
                 m_is_direct_create_text = is_only_text_case();
@@ -2494,6 +2499,25 @@ void GLGizmoText::on_render_input_window(float x, float y, float bottom_limit)
         m_parent.request_extra_frame();
     }
 
+    // A cut just failed: the painted geometry was kept, but the gizmo still
+    // shows the parameters that produced the failure. GenerateTextJob::finalize
+    // sets last_generate_failed=true on its failure exits and =false the moment
+    // a generate succeeds, so reading it directly each frame keeps the button
+    // in sync (no separate latch to drift). Offer a button that snaps every
+    // parameter back to the geometry that's actually on the bed.
+    if (Emboss::GenerateTextJob::last_generate_failed && m_last_text_mv != nullptr) {
+        m_imgui->warning_text_wrapped(
+            _L("Warning") + ":" +
+            _L("These fields show settings that weren't applied. The model "
+               "still uses the last applied values. Reset to match."),
+            full_width);
+        if (m_imgui->button(_L("Reset to applied values"))) {
+            reset_to_applied_params();
+            Emboss::GenerateTextJob::last_generate_failed = false;
+        }
+        m_parent.request_extra_frame();
+    }
+
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 10.0f));
     float get_cur_y = ImGui::GetContentRegionMax().y + ImGui::GetFrameHeight() + y;
     show_tooltip_information(x, get_cur_y);
@@ -3113,6 +3137,54 @@ bool GLGizmoText::init_create(ModelVolumeType volume_type) {  // check valid vol
     m_text_lines.reset(); // remove not current text lines
     // set default text
     return true;
+}
+
+void GLGizmoText::reset_to_applied_params()
+{
+    // Restore every gizmo parameter to the values of the geometry that is
+    // ACTUALLY painted on the model. Used by the post-failure reset button:
+    // when a cut fails, finalize() keeps the previous geometry but the gizmo
+    // still shows the (rejected) parameters the user just entered, so the
+    // on-screen values no longer describe what's on the bed. This makes them
+    // agree again.
+    //
+    // m_last_text_mv->get_text_info() is always the last SUCCESSFUL params,
+    // because every failure exit in GenerateTextJob::finalize bails before
+    // committing a new volume (and _update_volume / create_text_volume /
+    // recreate_model_volume all refuse empty meshes), so the stored TextInfo
+    // is never overwritten by a failed cut.
+    if (m_last_text_mv == nullptr)
+        return;
+    const TextInfo applied = m_last_text_mv->get_text_info();
+
+    // load_from_text_info repopulates the plain member fields (m_thickness,
+    // m_embeded_depth, m_text_gap, m_surface_type, m_text, m_font_*, ...) and
+    // reseats the font/style. It only re-cuts when the TEXT STRING changed --
+    // here the string is unchanged (we restore the painted volume's own text),
+    // so this does NOT trigger a re-cut. That's the whole point: the geometry
+    // already matches these parameters.
+    load_from_text_info(applied);
+
+    // The numeric style props (size, boldness, skew, angle) are re-read from
+    // the StyleManager every frame -- not from the members load_from_text_info
+    // just set -- so they would snap back to the rejected values on the next
+    // draw unless we also reseat them on the style. Mirror the bindings used
+    // by draw_height / draw_advanced / draw_rotation.
+    FontProp &prop      = m_style_manager.get_font_prop();
+    prop.size_in_mm     = applied.m_font_size;
+    prop.boldness       = applied.text_configuration.style.prop.boldness;
+    prop.skew           = applied.text_configuration.style.prop.skew;
+    m_style_manager.get_style().angle =
+        Geometry::deg2rad((double) applied.m_rotate_angle);
+
+    // Keep the slider "min/max boundary" trackers consistent with the values
+    // we just restored so the next drag/slide starts from a clean reference.
+    m_text_boldness_min_max = m_custom_boldness;
+    m_text_skew_min_max     = m_custom_skew;
+    m_text_gap_min_max      = m_text_gap;
+    m_rotate_angle_min_max  = m_rotate_angle;
+
+    m_parent.request_extra_frame();
 }
 
 void GLGizmoText::reset_text_info()

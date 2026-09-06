@@ -411,6 +411,15 @@ public:
     static void generate_mesh_according_points(InputInfo& input_info);
     static std::vector<Vec3d>       debug_cut_points_in_world;
 
+    // Set true when finalize() bails on a failed cut (exception or empty mesh)
+    // WITHOUT committing a new volume, so the previous geometry is kept. The
+    // Text gizmo reads + clears this to offer a "reset to applied values"
+    // affordance: the on-screen parameters that produced the failure differ
+    // from the parameters of the geometry actually painted, and resetting the
+    // gizmo to the painted volume's TextInfo makes the two agree again.
+    // Mirrors UpdateSurfaceVolumeJob::is_use_surfae_error (consumed by SVG).
+    static bool last_generate_failed;
+
 public:
     explicit GenerateTextJob(InputInfo &&input);
     void process(Ctl &ctl) override;

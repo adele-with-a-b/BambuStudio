@@ -1590,6 +1590,7 @@ void calc_position_points(std::vector<Vec3d> &position_points, std::vector<doubl
 
 GenerateTextJob::GenerateTextJob(InputInfo &&input) : m_input(std::move(input)) {}
 std::vector<Vec3d> GenerateTextJob::debug_cut_points_in_world;
+bool GenerateTextJob::last_generate_failed = false;
 void GenerateTextJob::process(Ctl &ctl)
 {
     auto canceled = was_canceled(ctl, *m_input.m_data_update.base);
@@ -1658,8 +1659,11 @@ void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
         eptr = nullptr;
         return;
     }
-    if (eptr && exception_process(eptr))
+    if (eptr && exception_process(eptr)) {
+        // Cut failed; previous geometry kept. Let the gizmo offer a reset.
+        last_generate_failed = true;
         return;
+    }
 
     // Even on the SUCCESS path (no exception), the worker can finish with an
     // empty m_final_text_mesh: GenerateTextJob::process clean-returns without
@@ -1689,8 +1693,14 @@ void GenerateTextJob::finalize(bool canceled, std::exception_ptr &eptr)
                          "shrinking it, or simplifying the surface underneath."));
             }
         }
+        // Empty mesh; previous geometry kept. Let the gizmo offer a reset.
+        last_generate_failed = true;
         return;
     }
+
+    // Reached the commit path with a non-empty mesh: this generate succeeded,
+    // so the gizmo parameters now match the painted geometry again.
+    last_generate_failed = false;
 
     if (m_input.first_generate) {
         if (!create_text_volume(m_input.mo,  m_input.m_final_text_mesh, m_input.m_final_text_tran_in_object, m_input.text_info))

@@ -284,6 +284,10 @@ private:
     bool filter_model_volume(ModelVolume* mv);
     //void update_font_status();
     void reset_text_info();
+    // Restore all gizmo parameters to those of the currently-painted geometry
+    // (m_last_text_mv->get_text_info()). Offered as a button after a failed cut
+    // so the on-screen values match what's actually on the bed. Does not re-cut.
+    void reset_to_applied_params();
 
     float get_text_height(const std::string &text);
     void close_warning_flag_after_close_or_drag();
