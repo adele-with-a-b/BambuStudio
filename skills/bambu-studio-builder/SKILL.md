@@ -55,6 +55,25 @@ After install, `dev-build.sh` automatically:
 
 ### Troubleshooting
 
+**Never pipe a build into `tail`.** `cmake --build ... | tail -30` returns *tail's* exit status, so a failed build reports success — and the truncation hides the compiler errors that explain it. Redirect instead:
+```bash
+cmake --build build --target <t> -j$(sysctl -n hw.ncpu) > /tmp/build.log 2>&1; echo "exit=$?"
+```
+Same for `dev-build.sh`. This bit me on 2026-09-05: the harness reported "exit code 0" while `make` had died with `Error 2`, and I only noticed because the expected binary didn't exist. Note `dev-build.sh` is itself safe to read from — it routes the real compile log to `build.log` and only echoes that file's tail to stdout, so **`build.log` is the authoritative record**, not the captured stdout. Grepping the stdout fragment for `Building CXX` will show zero compiles even on a build that compiled 600 files.
+
+**The test suite does not compile — `-DSLIC3R_BUILD_TESTS=ON` fails.** Verified 2026-09-05 against upstream `66e405477`: the `fff_print_tests` target dies with 33 errors across four files, all pre-existing upstream rot, none of it ours:
+
+| file | errors | cause |
+|---|---|---|
+| `tests/fff_print/test_gcodewriter.cpp` | 19 | `GCodeWriter::lift` and `GCodeConfig::retract_lift` no longer exist |
+| `tests/fff_print/test_print.cpp` | 9 | `Print::brim()` no longer exists (upstream lines 102/112/124) |
+| `tests/fff_print/test_skirt_brim.cpp` | 2 | same class |
+| `tests/fff_print/test_support_material.cpp` | 1 | same class |
+
+Consequences worth internalising before promising anything to a maintainer: you cannot add a *runnable* Catch2 regression test under `tests/fff_print/` without first repairing upstream's rot; upstream CI doesn't run these either (the flag defaults OFF at `CMakeLists.txt:91`, forced OFF only for cross-compile at `:96`); and "I'll add a regression test" is therefore not a commitment you can honour in an upstream PR body for this repo. Small fixes here ship without tests as a matter of house practice — cf. `ef96c2001`, 4 insertions, no test.
+
+If you do need to run one test, the harness itself is fine (`tests/fff_print/test_data.hpp:67` gives `init_print(std::initializer_list<TriangleMesh>, Print&, Model&, config)`); you just have to exclude the four rotted files from `tests/fff_print/CMakeLists.txt` first. Remember to set `SLIC3R_BUILD_TESTS=OFF` and reconfigure afterwards — leaving it ON invalidates libslic3r and forces a ~600-file rebuild on the next app build.
+
 **`./dev-build.sh: no such file or directory` — the script is branch-scoped.** `dev-build.sh` and `skills/` are fork-only files tracked on `dev` (and branches cut from `dev`). They are deliberately ABSENT from upstream-PR branches (`preset-hot-reload` etc.) so the PR diff stays clean. `git switch preset-hot-reload` therefore DELETES the script from the working tree, and the next build launch dies with exit 127. Verified 2026-09-05 — do not misdiagnose as a cwd, PATH, or sandbox problem; run `pwd; ls dev-build.sh; git rev-parse --abbrev-ref HEAD` in the FOREGROUND first.
 
 Restore it as an untracked file (won't pollute the PR branch):
@@ -109,6 +128,32 @@ Cloud mode not tested and likely doesn't work, but LAN mode is the preferred wor
 - Always commit with descriptive messages
 
 ## Active Branches
+
+### Emboss / text-gizmo crash workstream (state 2026-09-05, nothing filed)
+
+Three *distinct* bugs, not one. Treating them as a single blocked thing is what parked this for three months. Nothing is on upstream — `gh pr list --head <branch>` returns empty for every branch below.
+
+**Bug A — CGAL/GMP stack-stomp in `cut_surface()`.** `emboss-pr1/cgal-helper-subprocess`, plus the 16 MB stack bump on the local-only `emboss-crash-fix`. This is the contested one. Upstream **merged and then reverted** the stack bump: PR #10847 merged 2026-05-21, reverted 2026-05-28 by `ced8934c7908` with reason `<测试确认修复不行>`; QA measured *"still a 50% chance of crashing"* and asked twice for a QuickRecorder GIF that was never supplied. The PR page still displays **MERGED** — a search that stops at PR state will conclude wrongly that this shipped. `upstream/master:src/libslic3r/Thread.hpp:53` is back to 4 MB. OrcaSlicer cherry-picked the identical patch the same day ([OrcaSlicer#13772](https://github.com/OrcaSlicer/OrcaSlicer/pull/13772)) and still ships `16 * 1024 * 1024`.
+
+  **`emboss-pr1` is NOT filable as-is.** The macOS Mach-exception handler that stops the helper's signal-death from writing a user-visible `.ips` crash report exists *only* on `emboss/strip-cruft-20260609` — `task_set_exception_ports` appears 2× and `EXIT_HELPER_OVERFLOW` 6× there, **0× on `emboss-pr1` and `emboss-crash-fix`**. Filing pr1 without absorbing that surplus reproduces the exact signal QA used to revert #10847. Also relevant: `upstream/master:src/libslic3r/TryCatchSignal.hpp` is a **no-op stub on every non-MSVC platform**, so there is no in-process recovery primitive to reuse on macOS/Linux.
+
+**Bug B — empty text mesh → null deref in slicing prep.** `emboss-pr4/empty-text-mesh-throws` @ 6 insertions / 3 deletions, build-verified, ready. Superseded `emboss-pr4/empty-mesh-chokepoint` (118 lines / 3 files), which must NOT be filed: its `PrintApply.cpp` hunk stripped empty volumes from the vector `update_volume_bboxes` walks, and that function is the **sole writer** of `PrintObjectRegions::cached_volume_ids` (`PrintApply.cpp:955-959`) while the consumer at `:687-690` indexes that vector in a loop with **no bounds check** — so the strip desynchronised them and turned a deterministic fault into an OOB read.
+
+  Root cause and trigger, both source-verified: `create_all_char_mesh` calls `result.clear()` at `EmbossJob.cpp:1284` and only *then* tests all-space input at `:1291-1293` (`wxRegEx("^ +$")`), so all-space text returns an empty result; `process()` bare-returns at `:1404`; `generate_mesh_according_points` never runs so `m_final_text_mesh` stays default-constructed (`InputInfo` is a stack local at `GLGizmoText.cpp:3336`, and `:1922` is its only writer); `finalize()` tests only `canceled || eptr` and commits it; `Print::apply` → `update_volume_bboxes` → `transformed_its_bbox2d` reads `its.vertices[its.indices.front()(0)]` at `PrintApply.cpp:587` with the guarding assert one line above compiled out (build type is Release, `-DNDEBUG`).
+
+**Bug C — modal dialog on recoverable failure.** `emboss-pr3/recoverable-toast`, rebased and build-verified, but **do not file it in its current shape: it is a no-op for the path its own commit message describes.** pr3 only modifies `exception_process()`. `GLGizmoText` dispatches `GenerateTextJob` (`GLGizmoText.cpp:3374`), and `GenerateTextJob::finalize` never calls `exception_process()` — it tests `canceled || eptr` and discards `eptr`.
+
+**The `_finalize` asymmetry (the key structural fact behind both B and C).** Five of the seven `finalize()` methods in `EmbossJob.cpp` call `if (!_finalize(canceled, eptr, *m_input.base)) return;` (`:350`, `373`, `456`, `535`, `552` on master), which routes the exception through `exception_process()` → `create_message()` and shows the user something. `GenerateTextJob::finalize` and `CreateObjectTextJob::finalize` instead test `canceled || eptr` and drop `eptr`. Consequences: the five `throw JobException` calls already in `GenerateTextJob::process` are **dead code today**; pr3 cannot reach the text path; and pr4's new throws stop the crash without telling the user anything. Rewiring those two `finalize()` methods is the missing piece and belongs in pr3.
+
+`CreateObjectTextJob` has the same bare return at `EmbossJob.cpp:1978` but is **not** buggy — its `finalize()` guards `m_input.m_position_points.empty()`. That is the contract `GenerateTextJob` is missing, and it's the strongest argument in pr4's PR body.
+
+**Build-prereq commits are obsolete.** Every emboss branch originally carried `build: tolerate unknown -W flags on AppleClang 21+` and `build: switch wxMediaState sentinels from constexpr to const`. Upstream `3f3c1bd46` supersedes both with strictly better fixes (`static inline wxMediaState` at `MediaPlayCtrl.h:97`; `check_cxx_compiler_flag` at `CMakeLists.txt:307`). They were also the **sole** cause of every rebase conflict — drop them and cherry-pick only the emboss commit onto fresh `upstream/master` for a zero-conflict result.
+
+**Still live upstream:** #7782, #5995, #9418 all open; #6403 same class, never commented on by us. Corrections for the stale "fixed in main" claim were posted to the first three on 2026-09-05.
+
+`emboss/strip-cruft-20260609` is a daily-driver integration branch, explicitly not for upstream; it also has a real build defect (`tests/libslic3r/CMakeLists.txt` references 8 nonexistent files, benign only because tests default OFF). Its uncommitted WIP is a finished "Reset to applied values" UX feature that depends on pr4's guards.
+
+**Treat every validation number in these commit messages as an unverified claim.** "316 helper spawns / 6 absorbed SIGBUS / 0 parent crashes", "30/30 clean", "fired 29 times" — none has a log, artifact, or test behind it, and upstream QA already contradicted exactly this class of self-report on #10847. Re-measure before citing.
 
 ### `preset-hot-reload` (upstream PR #9919)
 - Reload user presets from disk without restart
