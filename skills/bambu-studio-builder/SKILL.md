@@ -61,6 +61,18 @@ cmake --build build --target <t> -j$(sysctl -n hw.ncpu) > /tmp/build.log 2>&1; e
 ```
 Same for `dev-build.sh`. This bit me on 2026-09-05: the harness reported "exit code 0" while `make` had died with `Error 2`, and I only noticed because the expected binary didn't exist. Note `dev-build.sh` is itself safe to read from — it routes the real compile log to `build.log` and only echoes that file's tail to stdout, so **`build.log` is the authoritative record**, not the captured stdout. Grepping the stdout fragment for `Building CXX` will show zero compiles even on a build that compiled 600 files.
 
+**`CMake Error: OpenMeshCraft is required` — new hard dependency as of 2026-09.** Upstream added an OpenMeshCraft mesh-boolean backend (`b5d1d3b5e0`) and then made it mandatory (`d7fdb018e6`, reverted by `50ce2592ba`, re-landed as `6850c21971`). `src/CMakeLists.txt:32` is now a `FATAL_ERROR` if the package isn't found. Two ways out:
+
+```bash
+# Proper: build the dep (deps/OpenMeshCraft exists, target dep_OpenMeshCraft)
+cmake -S deps -B deps_build && cmake --build deps_build --target dep_OpenMeshCraft -j$(sysctl -n hw.ncpu)
+
+# Fast escape hatch when you only need to compile-check GUI code:
+cmake -S . -B build -DSLIC3R_ALLOW_MCUT_BOOLEAN=ON
+```
+
+The fallback flag is upstream's own, documented in the error message, and it only swaps the boolean backend — fine for verifying unrelated changes, but it diverges from what CI builds, so don't leave the build tree configured that way when you're testing boolean/mesh behaviour. Note this is the same class of gap as the libharu case above: rebasing across months of upstream can introduce deps your prefix predates, and it fails at *configure* time, not compile time — so the error is in `dev-build.sh`'s stdout, not in `build.log`.
+
 **The test suite does not compile — `-DSLIC3R_BUILD_TESTS=ON` fails.** Verified 2026-09-05 against upstream `66e405477`: the `fff_print_tests` target dies with 33 errors across four files, all pre-existing upstream rot, none of it ours:
 
 | file | errors | cause |
@@ -133,7 +145,21 @@ Cloud mode not tested and likely doesn't work, but LAN mode is the preferred wor
 
 Three *distinct* bugs, not one. Treating them as a single blocked thing is what parked this for three months. Nothing is on upstream — `gh pr list --head <branch>` returns empty for every branch below.
 
-**Bug A — CGAL/GMP stack-stomp in `cut_surface()`.** `emboss-pr1/cgal-helper-subprocess`, plus the 16 MB stack bump on the local-only `emboss-crash-fix`. This is the contested one. Upstream **merged and then reverted** the stack bump: PR #10847 merged 2026-05-21, reverted 2026-05-28 by `ced8934c7908` with reason `<测试确认修复不行>`; QA measured *"still a 50% chance of crashing"* and asked twice for a QuickRecorder GIF that was never supplied. The PR page still displays **MERGED** — a search that stops at PR state will conclude wrongly that this shipped. `upstream/master:src/libslic3r/Thread.hpp:53` is back to 4 MB. OrcaSlicer cherry-picked the identical patch the same day ([OrcaSlicer#13772](https://github.com/OrcaSlicer/OrcaSlicer/pull/13772)) and still ships `16 * 1024 * 1024`.
+> ### ⛔ Bug A IS DEAD — upstream root-caused it 2026-09-01. Do not file pr1.
+>
+> `e654e5afc8` ("FIX: fix macOS SVG/text emboss use_surface crash (GMP arm64 x18)") — verified an ancestor of `upstream/master`, never reverted, patch wired unconditionally into `deps/GMP/GMP.cmake` as `0002-GMP_arm64_avoid_x18_reserved_on_darwin.patch`.
+>
+> **It was never a stack overflow.** GMP 6.2.1's arm64 mpn assembly uses register `x18`, the reserved platform register on Darwin. Clobbering it corrupts memory inside CGAL's exact predicates. Upstream applied GMP changeset `5f32dbc41afc` (the Homebrew/MacPorts patch) to use x17/x6/x14 instead. The rebuilt arm64 libgmp passes GMP's full `make check`; **36 of 50 tests were failing on Apple Silicon before it.**
+>
+> Everything below about Bug A was a wrong diagnosis, and the new one explains the evidence better: macOS-arm64-only (a stack theory never explained why 4 MB sufficed on Windows/Linux); intermittent at 3–13% per *identical* input (memory corruption, not varying recursion depth); `__stack_chk_fail` in traces (the canary tripped **by** the corruption — we read it backwards); and the 16 MB bump helping partially while leaving QA's ~50% residual (a bigger stack changes layout, changing whether the corruption lands fatally — masking, not fixing). **Bambu QA's revert of #10847 was correct, for a better reason than they gave.**
+>
+> Dead as a result: `emboss-pr1/cgal-helper-subprocess`, `emboss-pr1/cgal-helper-v2`, `emboss-crash-fix`, and the emboss half of `strip-cruft` — subprocess isolation, the Mach exception handler, `snap_expolygons_to_grid`, the size pre-flight. All symptom suppression around a deps patch. Bug B (#12137) and Bug C (pr3) are unaffected; they are different defects.
+>
+> **Local builds need `deps_build`'s GMP rebuilt** to pick this up, otherwise the crash still reproduces locally and misleads you toward the old theory.
+>
+> ⚠️ **The meta-lesson: a prior-art check is perishable.** The 571-commit sweep on 2026-09-05 correctly found no upstream fix — master was `66e405477` (Aug 31) and the fix landed Sep 1. Treating that point-in-time result as durable nearly pushed a refuted premise upstream. **For any parked workstream, re-run the redundancy check immediately before filing, not once when you pick it up.** What actually surfaced this was an unrelated configure failure (upstream's new hard `OpenMeshCraft` requirement) forcing a look at the commit log — luck, not process.
+
+**Bug A (WRONG DIAGNOSIS — kept for provenance) — CGAL/GMP stack-stomp in `cut_surface()`.** `emboss-pr1/cgal-helper-subprocess`, plus the 16 MB stack bump on the local-only `emboss-crash-fix`. This is the contested one. Upstream **merged and then reverted** the stack bump: PR #10847 merged 2026-05-21, reverted 2026-05-28 by `ced8934c7908` with reason `<测试确认修复不行>`; QA measured *"still a 50% chance of crashing"* and asked twice for a QuickRecorder GIF that was never supplied. The PR page still displays **MERGED** — a search that stops at PR state will conclude wrongly that this shipped. `upstream/master:src/libslic3r/Thread.hpp:53` is back to 4 MB. OrcaSlicer cherry-picked the identical patch the same day ([OrcaSlicer#13772](https://github.com/OrcaSlicer/OrcaSlicer/pull/13772)) and still ships `16 * 1024 * 1024`.
 
   **`emboss-pr1` is NOT filable as-is.** The macOS Mach-exception handler that stops the helper's signal-death from writing a user-visible `.ips` crash report exists *only* on `emboss/strip-cruft-20260609` — `task_set_exception_ports` appears 2× and `EXIT_HELPER_OVERFLOW` 6× there, **0× on `emboss-pr1` and `emboss-crash-fix`**. Filing pr1 without absorbing that surplus reproduces the exact signal QA used to revert #10847. Also relevant: `upstream/master:src/libslic3r/TryCatchSignal.hpp` is a **no-op stub on every non-MSVC platform**, so there is no in-process recovery primitive to reuse on macOS/Linux.
 
